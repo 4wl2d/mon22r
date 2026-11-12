@@ -1,0 +1,48 @@
+name: Monitor
+
+# Checks the public health address from outside the server. A failed run sends GitHub's usual
+# failure notification to the repository owner. The address is a secret so it stays out of public logs.
+on:
+  schedule:
+    - cron: "7,37 * * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: monitor
+  cancel-in-progress: true
+
+jobs:
+  health:
+    name: Health
+    if: vars.MONITOR_ENABLED == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Ask the service whether it is healthy
+        env:
+          HEALTHCHECK_URL: ${{ secrets.HEALTHCHECK_URL }}
+        run: |
+          body=""
+          for attempt in 1 2 3; do
+            if body="$(curl -fsS --max-time 15 "$HEALTHCHECK_URL")" && [[ "$body" == *'"ok":true'* ]]; then
+              echo "healthy on attempt $attempt: $body"
+              exit 0
+            fi
+            sleep 20
+          done
+          echo "::error::The service did not report healthy in three attempts. Last answer: ${body:0:200}"
+          exit 1
+      - name: Check that the certificate is not about to expire
+        env:
+          HEALTHCHECK_URL: ${{ secrets.HEALTHCHECK_URL }}
+        run: |
+          host="$(printf '%s' "$HEALTHCHECK_URL" | sed -E 's#^https://([^/:]+).*#\1#')"
+          end="$(echo | openssl s_client -connect "$host:443" -servername "$host" 2>/dev/null | openssl x509 -noout -enddate | cut -d= -f2)"
+          days=$(( ($(date -d "$end" +%s) - $(date +%s)) / 86400 ))
+          echo "certificate valid for $days more days"
+          if (( days < 10 )); then
+            echo "::error::The TLS certificate expires in $days days; automatic renewal is not working."
+            exit 1
+          fi

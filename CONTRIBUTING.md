@@ -1,28 +1,27 @@
 # Contributing
 
-mon22r is an early-stage, self-hosted Telegram ledger. Open a focused issue before proposing a large change. Public source availability does not grant a license; no open-source license has been selected yet.
+mon22r is a self-hosted Telegram ledger for one owner. Open a focused issue before proposing a large change. Public source availability does not grant a license; no open-source license has been selected.
 
 ## Local checks
 
-Use Node.js 22 or 24 and pnpm 10.34.9, as pinned in `package.json`:
+Node.js 22 or 24 and pnpm 10.34.9, as pinned in `package.json`:
 
 ```sh
 pnpm install --frozen-lockfile
-pnpm typecheck
-pnpm test
-pnpm --filter @mon22r/server build
-pnpm --filter @mon22r/miniapp build
+pnpm verify      # format and lint, typecheck, tests, builds
+pnpm format      # apply formatting and safe lint fixes
 ```
 
-The automated tests use synthetic fixtures and temporary/in-memory databases. They do not verify a live Telegram account, internet banking or a production deployment.
+Tests use made-up data, temporary databases, and a local stand-in for the Bot API. They never reach Telegram or a real ledger. `pnpm preview` serves the Mini App on a throwaway ledger for interface work.
 
 ## Pull requests
 
-- Branch from `main` and keep the diff focused. Describe behavior changes and how you checked them.
-- Preserve currency boundaries, exact money arithmetic, transfer semantics, user isolation and timezone-sensitive month behavior.
-- Add regression tests for changed behavior. Use fabricated accounts, dates and transactions in fixtures and screenshots.
-- Keep `.env`, database files, bank CSVs, Telegram init data, bot tokens and server identifiers out of the PR. Never paste real financial records into a public issue.
-- Update docs when setup or behavior changes. Check both the Mini App and bot when a shared API or domain type changes.
-- CI must pass and review conversations must be resolved before merge. A single maintainer can merge their own PR without an independent approval.
+- Branch from `main`, keep the diff focused, and say how you checked the change.
+- Keep currencies apart, money exact, transfers out of totals, users isolated, and months on the user's time zone.
+- Add a regression test for changed behavior. Use made-up accounts, dates, and amounts in fixtures and screenshots.
+- **Migrations are additive.** Add tables, columns with defaults, or indexes, so the previous release still runs on the new schema and a rollback needs no data change. If that is impossible, set `breaksOlderReleases` on the migration and say so in the pull request: rolling such a release back means restoring the pre-deploy backup.
+- Keep `.env`, database files, statements, launch data, tokens, and server addresses out of the repository and out of logs.
+- Update the docs when setup, operation, or behavior changes.
+- Merging to `main` releases to production once the checks pass. A single maintainer may merge their own pull request.
 
-See [setup](docs/SETUP.md), [architecture](docs/ARCHITECTURE.md) and the [security policy](.github/SECURITY.md). Report suspected vulnerabilities through the private reporting route rather than a public issue.
+See [setup](docs/SETUP.md), [operations](docs/OPERATIONS.md), [architecture](docs/ARCHITECTURE.md), and the [security policy](.github/SECURITY.md). Report suspected vulnerabilities privately, not in a public issue.

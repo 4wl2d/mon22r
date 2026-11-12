@@ -11,66 +11,87 @@
 
 # mon22r
 
-A small personal-finance ledger for Telegram. Capture everyday spending in chat, review a calendar month in a Mini App, and keep upcoming income in view. You run the server and own its SQLite storage.
+A personal-finance ledger for one person, in Telegram. Write what you spent in the chat, look at the month in a Mini App, keep expected income in view. You run the server and own its SQLite file.
 
-The interface pairs warm brass, quiet dark surfaces, and serif typography. The ledger underneath keeps amounts in integer minor units and each currency separate.
+**[Set up](docs/SETUP.md)** · **[Operate](docs/OPERATIONS.md)** · **[Architecture](docs/ARCHITECTURE.md)**
 
-**[Set up your instance](docs/SETUP.md)** · **[Explore the architecture](docs/ARCHITECTURE.md)**
+## In the chat
 
-## What it does
+```text
+кофе 350                                  expense on the default account
+кофе 350 #еда                             with a category; the tag creates it if needed
+кофе 4.50 gbp · обед €12 · такси 1200р    another currency
++зп 180000                                income
+возврат кроссовки 5000                    refund, lowers spending
+вчера такси 1200 · 5.11 такси 1200        another day
+перевод 5000 на наличные                  between accounts
+перевод 500 eur с евро на карта 58600     conversion: sent amount, then what arrived
+план зп 180000 5                          expect it on the 5th, every month
+/month    /undo    /help
+```
 
-- **Capture in chat.** Rule-based text entry for expenses, income, transfers, and next-month income plans, with category/match actions and `/undo`.
-- **Review the month.** Income, expenses, net movement, and category spending by currency, using your configured time zone.
-- **Plan incoming money.** Monthly or one-off income plans with expected, partial, received, and skipped states.
-- **Keep accounts organized.** Create, rename, archive, and restore currency-specific accounts. Correct transaction accounts and categories in the feed.
-- **Handle ledger details.** Paired transfers stay outside income and spending totals. Refunds reduce spending.
-- **Import deliberately.** Upload CSV, save column mappings, preview new, duplicate, and skipped rows, then confirm the import into a matching-currency account.
-- **Host a private instance.** Telegram user-ID allowlisting applies to both the bot and Mini App API. An empty allowlist denies everyone.
+- The reply shows what was saved, with buttons to undo it, pick a category, or move it to another account of the same currency. The message redraws in place.
+- An amount without a currency goes to the **default account**, in that account's currency. Without a default it is read in the home currency. For a named currency the bot reuses the account your last hand-entered line of that currency went to.
+- A category chosen once is remembered for the same note, in the chat and for imported statement lines.
+- Send a CSV statement as a file. Unknown formats ask once for the column names; then you get a preview of new, duplicate, and skipped lines and confirm the import.
+- `/undo` removes the last line you typed, never an imported one, and says what it removed.
+
+## In the Mini App
+
+- **Месяц.** One number for the month in your home currency, labeled as an estimate at the day's rate, then income, spending, and categories per currency. Tapping a category opens its entries. Expected income for the month is listed below with its status.
+- **Лента.** Entries by day with search and filters. Tap an entry to set its category in one tap, move it, or delete it. With a search or filter active, one action categorizes everything found.
+- **Настройки.** Accounts and the default account, categories, home currency, and time zone.
+
+Screens load from a small cache and refresh in the background, so changing tabs or months does not blank the page.
+
+<p align="center">
+  <img src="docs/assets/miniapp-month.jpg" alt="Month screen: a home-currency total, then income, spending, and categories per currency" width="250" />
+  <img src="docs/assets/miniapp-feed.jpg" alt="Feed screen: an entry opened to set its category, move it, or delete it" width="250" />
+  <img src="docs/assets/miniapp-settings.jpg" alt="Settings screen: accounts with the default account, categories, currency and time zone" width="250" />
+</p>
+<p align="center"><sub>Screens from <code>pnpm preview</code>, with made-up data.</sub></p>
+
+## What keeps it reliable
+
+- Amounts are integer minor units; currencies are never added together; a transfer is two linked rows outside income and spending.
+- A Telegram message is applied once, even if Telegram delivers it again after a restart.
+- The process stops cleanly on a release, confirms what it handled, and restarts itself if polling stalls.
+- A verified backup is written daily and kept for 14 days, and a copy is sent to your own chat weekly when the ledger changed. Every release takes one first.
+- Releases are built, tested, booted, and health-checked by the pipeline, and rolled back automatically if the new version does not come up healthy.
 
 ## Quick start
 
-Requires **Node.js 22+** and **pnpm 10.34.9**. Create a bot with BotFather and read the [setup guide](docs/SETUP.md) for configuration, HTTPS, and the Telegram menu.
+Requires **Node.js 22 or 24** and **pnpm 10.34.9**.
 
 ```sh
 corepack enable
-corepack prepare pnpm@10.34.9 --activate
 pnpm install --frozen-lockfile
 
-pnpm typecheck
-pnpm test
-pnpm --filter @mon22r/server build
-pnpm --filter @mon22r/miniapp build
-
-# After creating and configuring .env; run from the repository root.
-node --env-file=.env apps/server/dist/main.js
+pnpm verify     # format, lint, typecheck, tests, builds
+pnpm preview    # the Mini App on a throwaway ledger, no Telegram needed
 ```
 
-The server serves both `/api/*` and the built Mini App. For a public deployment, use the documented [manual Docker Compose setup](docs/SETUP.md#manual-docker-compose-deployment) with Caddy and a domain you control.
+To run your own instance, follow [setup](docs/SETUP.md). Day-to-day operation, backups, restore, and troubleshooting are in [operations](docs/OPERATIONS.md).
 
-## A compact stack
+## Layout
 
 ```text
+apps/server        grammY bot, Hono API, backups, scheduled jobs
 apps/miniapp       React 19 + Vite + Telegram Mini Apps SDK
-apps/server        grammY bot + Hono HTTP API
 packages/domain    Money, transactions, months, plans, FX estimates
-packages/db        Drizzle + better-sqlite3 + versioned migrations
+packages/db        Drizzle + better-sqlite3, versioned migrations, backups
 packages/importers CSV parsing, mapping, preview, duplicate handling
+deploy             Production stack, release scripts, pipeline helpers
 ```
 
-One Node process runs the HTTP server and a long-polling bot. SQLite persists the ledger; Caddy terminates HTTPS in the Compose deployment. See [architecture](docs/ARCHITECTURE.md) for the request and import paths.
+## Boundaries
 
-## Early-stage boundaries
-
-This is an early-stage, self-hosted project. Review it and test with synthetic data before relying on it for important records.
-
-- The current bot copy, phrase grammar, and Mini App interface are primarily Russian.
-- Entry is manual or CSV-based. There are no implemented bank integrations, automatic bank synchronization, or AI features.
-- Home-currency totals are labeled estimates and need stored FX reference rates. There is no automatic rate feed or rate-management interface.
-- A reminder preference exists in the model; scheduled reminder delivery is not implemented.
-- Telegram transports bot messages and uploaded documents. Self-hosting controls the application server and database, not Telegram's infrastructure.
-- The allowlist and signed Mini App authentication are implemented controls, not an audited-security claim. Deployment hardening and backups are the operator's responsibility.
-- Keep one active polling instance per bot token. Never expose the Mini App development server publicly.
-
-The commands above are the repository's verification steps. CI status is shown by the workflow badge; the CodeQL badge links to code-scanning results.
+- Built for one owner. The allowlist admits the Telegram IDs you configure and nobody else.
+- Chat grammar and interface are Russian.
+- Entry is by hand or by CSV. There is no bank connection.
+- Home-currency totals are estimates from a daily reference rate ([Rates By Exchange Rate API](https://www.exchangerate-api.com)); stored amounts are never converted.
+- The reminder flag on a plan is stored but nothing sends reminders.
+- Telegram carries your messages and files, and the weekly backup copy. Self-hosting covers the server and the database, not Telegram.
+- Access control and signed Mini App launch data are implemented and tested; that is not a security audit.
 
 No open-source license has been selected. All rights reserved.
