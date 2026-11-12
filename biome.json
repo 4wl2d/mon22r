@@ -2,7 +2,7 @@
   "$schema": "./node_modules/@biomejs/biome/configuration_schema.json",
   "vcs": { "enabled": true, "clientKind": "git", "useIgnoreFile": true },
   "files": {
-    "includes": ["**", "!**/dist", "!**/coverage", "!pnpm-lock.yaml", "!docs/assets"]
+    "includes": ["**", "!**/dist", "!**/coverage", "!pnpm-lock.yaml", "!docs/assets", "!**/*.md"]
   },
   "formatter": {
     "enabled": true,
@@ -17,7 +17,7 @@
   "linter": {
     "enabled": true,
     "rules": {
-      "recommended": true,
+      "preset": "recommended",
       "style": {
         "noNonNullAssertion": "error",
         "useImportType": "error",

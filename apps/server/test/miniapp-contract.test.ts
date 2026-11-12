@@ -1,279 +1,232 @@
-import {
-  createUser,
-  type Mon22rDb,
-  migrate,
-  openDatabase,
-  recordTransaction,
-  recordTransfer,
-  updateStoredUser,
-  upsertFxRate,
-} from "@mon22r/db";
-import { sign } from "@tma.js/init-data-node";
+import { getUserByTelegramId, type Mon22rDb, replaceFxRate } from "@mon22r/db";
 import { afterEach, describe, expect, it } from "vitest";
+
 import {
   ApiError,
-  copyPlans,
+  categorizeTransactions,
   createAccount,
   createCategory,
-  createPlan,
+  deleteCategory,
+  deleteTransaction,
   errorText,
-  getAccounts,
   getMe,
   getMonth,
-  getPlans,
   getTransactions,
+  renameCategory,
   setInitData,
   setup,
   updateAccount,
   updateExpectationStatus,
-  updatePlanAmount,
+  updatePlan,
+  updateSettings,
   updateTransaction,
 } from "../../miniapp/src/api.js";
+import { applyPhrase } from "../src/capture.js";
 import { createApp } from "../src/http.js";
+import { authHeader, memoryDatabase, TEST_TOKEN } from "./helpers.js";
 
-const open: Mon22rDb[] = [];
-const token = "123456:TESTTOKEN";
+const OWNER = 42;
+const now = new Date("2026-11-12T10:00:00.000Z");
 let restoreFetch: (() => void) | null = null;
 
-function database(): Mon22rDb {
-  const db = openDatabase(":memory:");
-  migrate(db);
-  open.push(db);
-  return db;
-}
-
-function rawInit(id: number): string {
-  return sign({ user: { id, first_name: "A" } }, token, new Date());
-}
-
-function useClient(db: Mon22rDb, telegramId: number): void {
+/** Points the Mini App's own client at an in-process server, the way the browser reaches the real one. */
+function connect(db: Mon22rDb, telegramId: number = OWNER): { calls: string[] } {
   const app = createApp({
     db,
-    botToken: token,
-    allowed: new Set([42, 99]),
-    miniAppDist: "/no/such/mon22r-dist",
+    botToken: TEST_TOKEN,
+    allowed: new Set([OWNER]),
+    miniAppDist: "/no/such/dist",
+    now: () => now,
   });
-  const previous = globalThis.fetch;
-  globalThis.fetch = async (input, init) => {
-    const url = new URL(
-      typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url,
-      "http://127.0.0.1",
-    );
-    const headers = new Headers(init?.headers);
+  const calls: string[] = [];
+  swapFetch(async (input, init) => {
+    const url = new URL(String(input), "http://127.0.0.1");
+    calls.push(`${init?.method ?? "GET"} ${url.pathname}`);
     return app.request(`${url.pathname}${url.search}`, {
       method: init?.method ?? "GET",
-      headers,
+      headers: new Headers(init?.headers),
       body: typeof init?.body === "string" ? init.body : undefined,
     });
-  };
-  restoreFetch = () => {
+  });
+  setInitData(authHeader(telegramId).slice("tma ".length));
+  return { calls };
+}
+
+function swapFetch(next: typeof fetch): void {
+  const previous = globalThis.fetch;
+  globalThis.fetch = next;
+  restoreFetch ??= () => {
     globalThis.fetch = previous;
   };
-  setInitData(rawInit(telegramId));
 }
 
 afterEach(() => {
   restoreFetch?.();
   restoreFetch = null;
-  for (const db of open) db.close();
-  open.length = 0;
 });
 
-describe("mini app reads the server JSON", () => {
-  it("keeps setup open when a user already exists and is not ready", async () => {
-    const db = database();
-    const user = createUser(db, { telegramId: 42, homeCurrency: "GBP", timeZone: "Europe/London" });
-    updateStoredUser(db, user.id, { onboardingStep: "accounts" });
-    useClient(db, 42);
+describe("the Mini App client against the real server", () => {
+  it("sets the ledger up and manages accounts, the default account, and categories", async () => {
+    const db = memoryDatabase();
+    connect(db);
+    const before = await getMe();
+    expect(before).toMatchObject({
+      ready: false,
+      user: null,
+      onboardingStep: "currency",
+      accounts: [],
+      defaultAccountId: null,
+    });
 
+    const user = await setup({ homeCurrency: "EUR", timeZone: "Europe/Belgrade", starterAccounts: false });
+    expect(user).toMatchObject({ homeCurrency: "EUR", timeZone: "Europe/Belgrade" });
+    const card = await createAccount({ name: "Карта", currency: "RSD" });
+    const euro = await createAccount({ name: "Евро", currency: "EUR" });
+    expect((await updateSettings({ defaultAccountId: card.id })).defaultAccountId).toBe(card.id);
+    expect((await updateAccount(euro.id, { name: "Счёт EUR" })).account.name).toBe("Счёт EUR");
+    // Archiving the default account reports that the default is gone.
+    expect(await updateAccount(card.id, { archived: true })).toMatchObject({
+      account: { archived: true },
+      defaultAccountId: null,
+    });
+    expect((await updateSettings({ timeZone: "Europe/London" })).user.timeZone).toBe("Europe/London");
+
+    const food = await createCategory("Еда");
+    expect((await renameCategory(food.id, "Продукты")).name).toBe("Продукты");
     const me = await getMe();
-    expect(me.ready).toBe(false);
-    expect(me.user?.homeCurrency).toBe("GBP");
-    expect(me.user?.timeZone).toBe("Europe/London");
-    expect(me.onboardingStep).toBe("accounts");
-    expect(me.accounts).toEqual([]);
+    expect(me.ready).toBe(true);
+    expect(me.categories.map((category) => category.name)).toEqual(["Продукты"]);
+    expect(me.accounts.map((account) => `${account.name} ${account.currency} ${account.archived}`)).toEqual([
+      "Карта RSD true",
+      "Счёт EUR EUR false",
+    ]);
+    await deleteCategory(food.id);
+    expect((await getMe()).categories).toEqual([]);
   });
 
-  it("reads month, plans, feed, and accounts without adding currencies", async () => {
-    const db = database();
-    useClient(db, 42);
-    const before = await getMe();
-    expect(before).toMatchObject({ ready: false, user: null, onboardingStep: "currency", telegramId: 42 });
-
-    const user = await setup({ homeCurrency: "RSD", timeZone: "Europe/Belgrade", starterAccounts: true });
-    expect(user.homeCurrency).toBe("RSD");
-    expect(user.timeZone).toBe("Europe/Belgrade");
-    const ready = await getMe();
-    expect(ready.ready).toBe(true);
-    expect(ready.onboardingStep).toBeNull();
-    expect(ready.accounts.map((account) => `${account.name} ${account.currency}`)).toEqual([
-      "Поштанска RSD",
-      "Рубли RUB",
-      "UK GBP",
-    ]);
-
-    const accounts = await getAccounts();
-    const rsd = accounts.find((account) => account.currency === "RSD");
-    const pounds = accounts.find((account) => account.currency === "GBP");
-    expect(rsd).toBeDefined();
-    expect(pounds).toBeDefined();
-    if (!rsd || !pounds || !ready.user) return;
+  it("reads a month and its feed, then categorizes, moves, and deletes", async () => {
+    const db = memoryDatabase();
+    connect(db);
+    await setup({ homeCurrency: "EUR", timeZone: "Europe/Belgrade", starterAccounts: false });
+    const card = await createAccount({ name: "Карта", currency: "RSD" });
     const cash = await createAccount({ name: "Наличные", currency: "RSD" });
-    const food = await createCategory("еда");
-    await expect(createCategory("еда")).rejects.toMatchObject({ message: "Category name already exists" });
-
-    const spent = recordTransaction(db, ready.user.id, {
-      accountId: rsd.id,
-      kind: "expense",
-      amountMinor: 35_000,
-      currency: "RSD",
-      categoryId: food.id,
-      occurredAt: "2026-10-12T10:00:00.000Z",
-      description: "кофе",
-    }).transaction;
-    recordTransaction(db, ready.user.id, {
-      accountId: rsd.id,
-      kind: "refund",
-      amountMinor: 1_000,
-      currency: "RSD",
-      categoryId: food.id,
-      refundOfTransactionId: spent.id,
-      occurredAt: "2026-10-12T12:00:00.000Z",
-      description: "возврат кофе",
-    });
-    recordTransaction(db, ready.user.id, {
-      accountId: rsd.id,
-      kind: "expense",
-      amountMinor: 2_000,
-      currency: "RSD",
-      occurredAt: "2026-10-12T13:00:00.000Z",
-      description: "такси",
-    });
-    recordTransaction(db, ready.user.id, {
-      accountId: rsd.id,
-      kind: "income",
-      amountMinor: 5_000,
-      currency: "RSD",
-      occurredAt: "2026-10-12T14:00:00.000Z",
-      description: "кэш",
-    });
-    recordTransfer(db, ready.user.id, {
-      fromAccountId: rsd.id,
-      toAccountId: cash.id,
-      from: { minor: 5_000, currency: "RSD" },
-      to: { minor: 5_000, currency: "RSD" },
-      occurredAt: "2026-10-12T15:00:00.000Z",
-      description: "наличные",
-    });
-    recordTransaction(db, ready.user.id, {
-      accountId: pounds.id,
-      kind: "expense",
-      amountMinor: 450,
-      currency: "GBP",
-      occurredAt: "2026-11-12T10:00:00.000Z",
-      description: "tea",
-    });
-
-    const october = await getMonth("2026-10");
-    expect(october.totalsByCurrency).toEqual([{ currency: "RSD", incomeMinor: 5_000, expenseMinor: 36_000 }]);
-    expect(october.categorySpend).toEqual([
-      { categoryId: food.id, currency: "RSD", spentMinor: 34_000 },
-      { categoryId: null, currency: "RSD", spentMinor: 2_000 },
-    ]);
-    expect(october.estimateInHomeCurrency).toEqual({
-      kind: "estimate",
-      minor: -31_000,
-      currency: "RSD",
-      asOf: null,
-      source: null,
-      usedConversion: false,
-    });
-
-    const missingRate = await getMonth("2026-11");
-    expect(missingRate.totalsByCurrency).toEqual([{ currency: "GBP", incomeMinor: 0, expenseMinor: 450 }]);
-    expect(missingRate.estimateInHomeCurrency).toBeNull();
-
-    upsertFxRate(db, {
-      baseCurrency: "GBP",
+    await createAccount({ name: "Евро", currency: "EUR" });
+    const food = await createCategory("Еда");
+    const user = getUserByTelegramId(db, OWNER);
+    if (user === null) throw new Error("user missing");
+    for (const line of ["maxi 1200 rsd", "lidl 800 rsd", "+оплата 2500", "перевод 100 eur на карта 11720"]) {
+      expect(applyPhrase(db, user, line, now).type).not.toBe("unparsed");
+    }
+    replaceFxRate(db, {
+      baseCurrency: "EUR",
       quoteCurrency: "RSD",
-      numerator: 150,
-      denominator: 1,
+      numerator: 11_720,
+      denominator: 100,
       asOf: "2026-11-12",
-      source: "ecb",
+      source: "er-api",
     });
-    const estimated = await getMonth("2026-11");
-    expect(estimated.estimateInHomeCurrency).toMatchObject({
-      kind: "estimate",
-      minor: -67_500,
-      currency: "RSD",
-      asOf: "2026-11-12",
-      source: "ecb",
+
+    const feed = await getTransactions("2026-11");
+    expect(feed.map((row) => row.kind).sort()).toEqual(["expense", "expense", "income", "transfer", "transfer"]);
+    const expenses = feed.filter((row) => row.kind === "expense");
+    expect(
+      await categorizeTransactions(
+        expenses.map((row) => row.id),
+        food.id,
+      ),
+    ).toBe(2);
+    const first = expenses[0];
+    if (first === undefined) throw new Error("expense missing");
+    expect((await updateTransaction(first.id, { accountId: cash.id })).accountId).toBe(cash.id);
+    expect(first.accountId).toBe(card.id);
+
+    const month = await getMonth("2026-11");
+    expect(month.totalsByCurrency).toEqual([
+      { currency: "EUR", incomeMinor: 250_000, expenseMinor: 0 },
+      { currency: "RSD", incomeMinor: 0, expenseMinor: 200_000 },
+    ]);
+    expect(month.categorySpend).toEqual([{ categoryId: food.id, currency: "RSD", spentMinor: 200_000 }]);
+    // 2 500,00 EUR in, 2 000,00 RSD out at 117.20: the transfer is in neither side.
+    expect(month.estimateInHomeCurrency).toMatchObject({
+      currency: "EUR",
+      minor: 250_000 - 1706,
       usedConversion: true,
     });
-    expect(estimated.totalsByCurrency).toEqual([{ currency: "GBP", incomeMinor: 0, expenseMinor: 450 }]);
 
-    const feed = await getTransactions("2026-10");
-    const refund = feed.find((row) => row.kind === "refund");
-    expect(refund).toMatchObject({ amountMinor: 1_000, currency: "RSD", direction: "inflow", categoryId: food.id });
-    expect(feed.filter((row) => row.kind === "transfer")).toHaveLength(2);
-    const cleared = await updateTransaction(spent.id, { categoryId: null });
-    expect(cleared.categoryId).toBeNull();
-    expect(cleared.amountMinor).toBe(35_000);
+    const transfer = feed.find((row) => row.kind === "transfer");
+    if (transfer === undefined) throw new Error("transfer missing");
+    expect(await deleteTransaction(transfer.id)).toHaveLength(2);
+    expect(await deleteTransaction(transfer.id)).toEqual([]);
+    expect(await getTransactions("2026-11")).toHaveLength(3);
+  });
 
-    const plan = await createPlan({
-      name: "Зарплата",
-      amountMinor: 18_000_000,
-      currency: "RSD",
-      dayOfMonth: 5,
-      accountId: null,
-      recurrence: "monthly",
-      startYear: 2026,
-      startMonth: 12,
+  it("shows expected income and lets a plan be changed and stopped", async () => {
+    const db = memoryDatabase();
+    connect(db);
+    await setup({ homeCurrency: "RSD", timeZone: "Europe/Belgrade", starterAccounts: true });
+    const user = getUserByTelegramId(db, OWNER);
+    if (user === null) throw new Error("user missing");
+    expect(applyPhrase(db, user, "план зп 180000 5", now).type).toBe("plan");
+
+    const december = await getMonth("2026-12");
+    expect(december.plans).toMatchObject([
+      { name: "зп", amountMinor: 18_000_000, recurrence: "monthly", active: true },
+    ]);
+    expect(december.expectations).toMatchObject([{ name: "зп", status: "expected", dayOfMonth: 5 }]);
+    const plan = december.plans[0];
+    const line = december.expectations[0];
+    if (plan === undefined || line === undefined) throw new Error("plan missing");
+
+    expect((await updatePlan(plan.id, { amountMinor: 20_000_000, currency: "RSD" })).amountMinor).toBe(20_000_000);
+    expect((await getMonth("2026-12")).expectations[0]?.expectedMinor).toBe(20_000_000);
+    expect(await updateExpectationStatus(line.id, "received")).toMatchObject({
+      status: "received",
+      receivedMinor: 20_000_000,
     });
-    const rows = await getPlans("2026-12");
-    expect(rows).toHaveLength(1);
-    expect(rows[0]?.plan?.id).toBe(plan.id);
-    expect(rows[0]?.expectation).toMatchObject({
-      planId: plan.id,
-      expectedMinor: 18_000_000,
-      receivedMinor: 0,
-      status: "expected",
-      currency: "RSD",
-    });
-    const updated = await updatePlanAmount(plan.id, 9_000_000, "RSD");
-    expect(updated.amountMinor).toBe(9_000_000);
-    const expectationId = rows[0]?.expectation?.id;
-    expect(expectationId).toBeTruthy();
-    if (!expectationId) return;
-    const received = await updateExpectationStatus(expectationId, "received");
-    expect(received.status).toBe("received");
-    expect(received.receivedMinor).toBe(9_000_000);
-    await copyPlans("2026-12", "2027-01");
-    const copied = await getPlans("2027-01");
-    expect(copied.some((row) => row.expectation?.status === "expected")).toBe(true);
+    expect((await updatePlan(plan.id, { active: false })).active).toBe(false);
+    expect((await getMonth("2027-01")).expectations).toEqual([]);
+    // December already has money against it, so it stays.
+    expect((await getMonth("2026-12")).expectations).toHaveLength(1);
+  });
 
-    const renamed = await updateAccount(cash.id, { name: "Карман" });
-    expect(renamed.name).toBe("Карман");
-    const archived = await updateAccount(cash.id, { archived: true });
-    expect(archived.archived).toBe(true);
-
-    setInitData("not-signed");
-    const denied = await getMe().then(
-      () => null,
-      (error: unknown) => error,
-    );
+  it("turns failures into sentences the screens can show", async () => {
+    const db = memoryDatabase();
+    connect(db, 7);
+    const denied = await getMe().catch((error: unknown) => error);
     expect(denied).toBeInstanceOf(ApiError);
-    expect(errorText(denied, "fallback")).toBe("Нет доступа.");
+    expect(errorText(denied, "x")).toBe("Сессия истекла. Закройте приложение и откройте его из чата снова.");
 
-    setInitData(rawInit(42));
-    const badMonth = await getMonth("bad").then(
-      () => null,
-      (error: unknown) => error,
-    );
-    expect(badMonth).toBeInstanceOf(ApiError);
-    if (badMonth instanceof ApiError) {
-      expect(badMonth.message).toBe("month must be YYYY-MM");
-      expect(badMonth.message).not.toBe("invalid_month");
-    }
+    connect(db);
+    await setup({ homeCurrency: "RSD", timeZone: "Europe/Belgrade", starterAccounts: false });
+    await createCategory("Еда");
+    const conflict = await createCategory("Еда").catch((error: unknown) => error);
+    expect(errorText(conflict, "x")).toBe("Такое название уже есть.");
+    const unknown = await createAccount({ name: "Счёт", currency: "ZZZ" }).catch((error: unknown) => error);
+    expect(errorText(unknown, "x")).toBe("Валюта не распознана.");
+    expect(errorText(new Error("stack trace"), "Не удалось.")).toBe("Не удалось.");
+  });
+
+  it("retries a failed read once, never a write, and rejects answers that do not fit the contract", async () => {
+    let attempts = 0;
+    swapFetch(async () => {
+      attempts += 1;
+      throw new TypeError("network down");
+    });
+    const offline = await getMonth("2026-11").catch((error: unknown) => error);
+    expect(attempts).toBe(2);
+    expect(errorText(offline, "x")).toBe("Нет соединения.");
+
+    attempts = 0;
+    const write = await createCategory("Еда").catch((error: unknown) => error);
+    // The first attempt may have reached the server; sending it again could create a duplicate.
+    expect(attempts).toBe(1);
+    expect(errorText(write, "x")).toBe("Нет соединения.");
+
+    swapFetch(async () => Response.json({ ready: "yes", accounts: [], categories: [] }));
+    await expect(getMe()).rejects.toThrow("Не удалось прочитать ответ.");
+    swapFetch(async () => Response.json({ transactions: [{ id: "t1", amountMinor: "12" }] }));
+    await expect(getTransactions("2026-11")).rejects.toThrow("Не удалось прочитать ответ.");
+    swapFetch(async () => new Response("<html>502 Bad Gateway</html>", { status: 502 }));
+    expect(errorText(await getMe().catch((error: unknown) => error), "x")).toBe("Не удалось выполнить запрос.");
   });
 });

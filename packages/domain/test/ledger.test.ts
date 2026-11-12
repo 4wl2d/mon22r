@@ -149,7 +149,8 @@ describe("income expectations", () => {
       description: "зп",
     });
     transactions.push(inflow);
-    const frozen = Object.freeze({ ...novemberExpectation! });
+    if (novemberExpectation === null) throw new Error("the plan applies to November");
+    const frozen = Object.freeze({ ...novemberExpectation });
     const match = matchInflowToExpectation([frozen], {
       id: inflow.id,
       userId: inflow.userId,
@@ -184,14 +185,15 @@ describe("income expectations", () => {
       "exp",
     );
     expect(expectation).not.toBeNull();
-    const partial = matchInflowToExpectation([expectation!], {
+    if (expectation === null) throw new Error("the plan applies to this month");
+    const partial = matchInflowToExpectation([expectation], {
       id: "pay-short",
       userId,
       amountMinor: 90_000,
       currency: "RSD",
       accountId: "card",
     });
-    const unrelated = matchInflowToExpectation([expectation!], {
+    const unrelated = matchInflowToExpectation([expectation], {
       id: "pay-other",
       userId,
       amountMinor: 50_000,

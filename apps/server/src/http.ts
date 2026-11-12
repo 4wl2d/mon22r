@@ -3,23 +3,20 @@ import { resolve } from "node:path";
 
 import { serveStatic } from "@hono/node-server/serve-static";
 import {
+  categorizeTransactions,
   correctTransaction,
   createAccount,
   createCategory,
-  createIncomePlan,
   createUser,
-  deleteLatestTransaction,
+  deleteCategory,
+  deleteTransaction,
   getUserByTelegramId,
   listAccounts,
   listCategories,
-  listIncomeExpectations,
-  listIncomePlans,
   listTransactions,
   type Mon22rDb,
-  materializePlanExpectation,
   readUserFlags,
-  recordTransaction,
-  recordTransfer,
+  renameCategory,
   updateAccount,
   updateIncomePlan,
   updateStoredUser,
@@ -27,24 +24,32 @@ import {
 import {
   assertCalendarMonth,
   type CalendarMonth,
+  DEFAULT_TIME_ZONE,
   EXPECTATION_STATUSES,
   type ExpectationStatus,
-  expectationFromPlan,
+  isKnownCurrency,
   LedgerError,
+  monthContaining,
   monthRange,
-  type PlanRecurrence,
   type User,
 } from "@mon22r/domain";
-import type { PreviewRow } from "@mon22r/importers";
-import { Hono, type MiddlewareHandler } from "hono";
+import { type Context, Hono, type MiddlewareHandler } from "hono";
+import { bodyLimit } from "hono/body-limit";
+import { HTTPException } from "hono/http-exception";
+import { secureHeaders } from "hono/secure-headers";
 
 import { AccessError, telegramUserId } from "./auth.js";
-import { commitStoredPreview, previewUpload, type UploadResult } from "./imports.js";
+import { createRuntime, type Runtime, readHealth } from "./health.js";
+import { errorFields, type Logger, silentLogger } from "./log.js";
 import { buildMonthView } from "./month-view.js";
-import { copyPlans, materializeApplicable, refreshOpenExpectations, setExpectationStatus } from "./plans.js";
+import { refreshOpenExpectations, setExpectationStatus, stopPlan } from "./plans.js";
 import { createStarterAccounts } from "./starter.js";
 
 type AppVars = { telegramId: number };
+type AppContext = Context<{ Variables: AppVars }>;
+
+const BODY_LIMIT_BYTES = 256 * 1024;
+const BULK_LIMIT = 1000;
 
 class OnboardingRequired extends Error {
   constructor() {
@@ -59,21 +64,79 @@ export function createApp(input: {
   readonly allowed: ReadonlySet<number>;
   readonly miniAppDist?: string;
   readonly now?: () => Date;
+  readonly log?: Logger;
+  readonly runtime?: Runtime;
 }): Hono<{ Variables: AppVars }> {
   const { db } = input;
   const now = input.now ?? (() => new Date());
+  const log = input.log ?? silentLogger;
+  const runtime = input.runtime ?? Object.assign(createRuntime("dev"), { pollingExpected: false });
   const dist = input.miniAppDist ?? resolve(process.cwd(), "apps/miniapp/dist");
   const app = new Hono<{ Variables: AppVars }>();
   let files: MiddlewareHandler<{ Variables: AppVars }> | null = null;
+  let indexHtml: string | null = null;
 
   app.onError((error, c) => {
     if (error instanceof AccessError) return c.json({ error: error.message, code: "unauthorized" }, 401);
     if (error instanceof OnboardingRequired) return c.json({ error: error.message, code: "onboarding_required" }, 409);
-    if (error instanceof LedgerError)
-      return c.json({ error: error.message, code: error.code }, ledgerStatus(error.code));
-    console.error(error);
+    if (error instanceof LedgerError) {
+      return c.json({ error: ledgerMessage(error), code: error.code }, ledgerStatus(error.code));
+    }
+    if (error instanceof HTTPException) {
+      const status = error.status;
+      const message = status === 413 ? "Слишком большой запрос." : "Запрос не выполнен.";
+      return c.json({ error: message, code: status === 413 ? "too_large" : "bad_request" }, status);
+    }
+    log.error("request failed", { method: c.req.method, path: c.req.path, ...errorFields(error) });
     return c.json({ error: "Ошибка сервера.", code: "internal" }, 500);
   });
+
+  // The Mini App runs inside Telegram's web clients in a frame, and in native clients in a web view.
+  app.use(
+    "*",
+    secureHeaders({
+      contentSecurityPolicy: {
+        defaultSrc: ["'none'"],
+        scriptSrc: ["'self'"],
+        styleSrc: ["'self'", "'unsafe-inline'"],
+        fontSrc: ["'self'"],
+        imgSrc: ["'self'", "data:"],
+        connectSrc: ["'self'"],
+        baseUri: ["'none'"],
+        formAction: ["'none'"],
+        frameAncestors: ["'self'", "https://web.telegram.org", "https://*.telegram.org"],
+      },
+      xFrameOptions: false,
+      referrerPolicy: "no-referrer",
+      strictTransportSecurity: "max-age=31536000",
+      crossOriginResourcePolicy: "same-origin",
+      crossOriginOpenerPolicy: false,
+      crossOriginEmbedderPolicy: false,
+    }),
+  );
+
+  app.get("/healthz", (c) => {
+    const report = readHealth(db, runtime, now().getTime());
+    c.header("Cache-Control", "no-store");
+    return c.json(report, report.ok ? 200 : 503);
+  });
+
+  app.use("/api/*", async (c, next) => {
+    const started = performance.now();
+    c.header("Cache-Control", "no-store");
+    try {
+      await next();
+    } finally {
+      log.info("request", {
+        method: c.req.method,
+        path: c.req.routePath,
+        status: c.res.status,
+        ms: Math.round(performance.now() - started),
+      });
+    }
+  });
+
+  app.use("/api/*", bodyLimit({ maxSize: BODY_LIMIT_BYTES }));
 
   app.use("/api/*", async (c, next) => {
     c.set("telegramId", telegramUserId(c.req.header("authorization"), input.botToken, input.allowed));
@@ -91,6 +154,8 @@ export function createApp(input: {
         onboardingStep: "currency",
         accounts: [],
         categories: [],
+        defaultAccountId: null,
+        version: runtime.version,
       });
     }
     const flags = readUserFlags(db, user.id);
@@ -102,13 +167,15 @@ export function createApp(input: {
       onboardingStep,
       accounts: listAccounts(db, user.id),
       categories: listCategories(db, user.id),
+      defaultAccountId: flags?.defaultAccountId ?? null,
+      version: runtime.version,
     });
   });
 
   app.post("/api/setup", async (c) => {
     const body = await readBody(c);
-    const homeCurrency = readString(body, "homeCurrency");
-    const timeZone = readOptionalString(body, "timeZone") ?? "Europe/Belgrade";
+    const homeCurrency = readCurrency(body, "homeCurrency");
+    const timeZone = readOptionalString(body, "timeZone") ?? DEFAULT_TIME_ZONE;
     const starterAccounts = readOptionalBoolean(body, "starterAccounts") ?? false;
     const telegramId = c.get("telegramId");
     let user = getUserByTelegramId(db, telegramId);
@@ -126,58 +193,27 @@ export function createApp(input: {
     return c.json({ user, accounts: listAccounts(db, user.id), onboardingStep: null });
   });
 
+  app.patch("/api/settings", async (c) => {
+    const user = requireUser(db, c.get("telegramId"));
+    const body = await readBody(c);
+    const patch: { homeCurrency?: string; timeZone?: string; defaultAccountId?: string | null } = {};
+    if (Object.hasOwn(body, "homeCurrency")) patch.homeCurrency = readCurrency(body, "homeCurrency");
+    if (Object.hasOwn(body, "timeZone")) patch.timeZone = readString(body, "timeZone");
+    if (Object.hasOwn(body, "defaultAccountId")) patch.defaultAccountId = readNullableString(body, "defaultAccountId");
+    if (Object.keys(patch).length === 0) throw new LedgerError("invalid_posting", "Nothing to update");
+    const updated = updateStoredUser(db, user.id, patch);
+    return c.json({ user: updated, defaultAccountId: readUserFlags(db, user.id)?.defaultAccountId ?? null });
+  });
+
   app.get("/api/month", (c) => {
     const user = requireUser(db, c.get("telegramId"));
     return c.json(buildMonthView(db, user, readMonthQuery(c.req.query("month"))));
   });
 
-  app.get("/api/plans", (c) => {
-    const user = requireUser(db, c.get("telegramId"));
-    const month = readMonthQuery(c.req.query("month"));
-    materializeApplicable(db, user.id, month);
-    const plans = listIncomePlans(db, user.id).filter(
-      (plan) => plan.active && expectationFromPlan(plan, month, "draft") !== null,
-    );
-    return c.json({
-      month,
-      plans,
-      expectations: listIncomeExpectations(db, user.id, month),
-    });
-  });
-
-  app.post("/api/plans/copy", async (c) => {
-    const user = requireUser(db, c.get("telegramId"));
-    const body = await readBody(c);
-    const to = readMonthValue(body, "toMonth");
-    const expectations = copyPlans(db, user.id, readMonthValue(body, "fromMonth"), to);
-    return c.json({ month: to, expectations });
-  });
-
-  app.post("/api/plans", async (c) => {
-    const user = requireUser(db, c.get("telegramId"));
-    const body = await readBody(c);
-    const plan = createIncomePlan(db, user.id, {
-      name: readText(body, "name"),
-      amountMinor: readMinor(body, "amountMinor"),
-      currency: readString(body, "currency"),
-      dayOfMonth: readDay(body, "dayOfMonth"),
-      accountId: readOptionalNullable(body, "accountId") ?? null,
-      recurrence: readRecurrence(body),
-      startYear: readInteger(body, "startYear"),
-      startMonth: readInteger(body, "startMonth"),
-      remind: readOptionalBoolean(body, "remind") ?? false,
-      active: readOptionalBoolean(body, "active") ?? true,
-    });
-    const month = { year: plan.startYear, month: plan.startMonth };
-    const expectation = expectationFromPlan(plan, month, "draft")
-      ? materializePlanExpectation(db, user.id, plan.id, month)
-      : null;
-    return c.json({ plan, expectation }, 201);
-  });
-
   app.patch("/api/plans/:id", async (c) => {
     const user = requireUser(db, c.get("telegramId"));
     const body = await readBody(c);
+    const id = requiredParam(c.req.param("id"));
     const patch: {
       name?: string;
       amountMinor?: number;
@@ -185,18 +221,22 @@ export function createApp(input: {
       dayOfMonth?: number;
       accountId?: string | null;
       remind?: boolean;
-      active?: boolean;
     } = {};
     if (Object.hasOwn(body, "name")) patch.name = readText(body, "name");
     if (Object.hasOwn(body, "amountMinor")) patch.amountMinor = readMinor(body, "amountMinor");
-    if (Object.hasOwn(body, "currency")) patch.currency = readString(body, "currency");
+    if (Object.hasOwn(body, "currency")) patch.currency = readCurrency(body, "currency");
     if (Object.hasOwn(body, "dayOfMonth")) patch.dayOfMonth = readDay(body, "dayOfMonth");
     if (Object.hasOwn(body, "accountId")) patch.accountId = readNullableString(body, "accountId");
     if (Object.hasOwn(body, "remind")) patch.remind = readBoolean(body, "remind");
-    if (Object.hasOwn(body, "active")) patch.active = readBoolean(body, "active");
-    if (Object.keys(patch).length === 0) throw new LedgerError("invalid_posting", "Nothing to update");
-    const plan = updateIncomePlan(db, user.id, requiredParam(c.req.param("id")), patch);
-    refreshOpenExpectations(db, user.id, plan);
+    const active = Object.hasOwn(body, "active") ? readBoolean(body, "active") : undefined;
+    if (Object.keys(patch).length === 0 && active === undefined) {
+      throw new LedgerError("invalid_posting", "Nothing to update");
+    }
+    let plan = Object.keys(patch).length === 0 ? null : updateIncomePlan(db, user.id, id, patch);
+    if (active === false) plan = stopPlan(db, user.id, id, monthContaining(now(), user.timeZone));
+    else if (active === true) plan = updateIncomePlan(db, user.id, id, { active: true });
+    if (plan === null) throw new LedgerError("invalid_posting", "Nothing to update");
+    if (plan.active) refreshOpenExpectations(db, user.id, plan);
     return c.json({ plan });
   });
 
@@ -218,46 +258,12 @@ export function createApp(input: {
     });
   });
 
-  app.post("/api/transactions", async (c) => {
+  app.post("/api/transactions/categorize", async (c) => {
     const user = requireUser(db, c.get("telegramId"));
     const body = await readBody(c);
-    const kind = readString(body, "kind");
-    const occurredAt = readString(body, "occurredAt");
-    const description = readOptionalText(body, "description") ?? "";
-    const createdAt = now().toISOString();
-    if (kind === "transfer") {
-      const currency = readString(body, "currency");
-      const amountMinor = readMinor(body, "amountMinor");
-      const transactions = recordTransfer(db, user.id, {
-        fromAccountId: readString(body, "fromAccountId"),
-        toAccountId: readString(body, "toAccountId"),
-        from: { minor: amountMinor, currency },
-        to: {
-          minor: Object.hasOwn(body, "toAmountMinor") ? readMinor(body, "toAmountMinor") : amountMinor,
-          currency: readOptionalString(body, "toCurrency") ?? currency,
-        },
-        occurredAt,
-        description,
-        createdAt,
-      });
-      return c.json({ transactions }, 201);
-    }
-    if (kind !== "expense" && kind !== "income" && kind !== "refund") {
-      throw new LedgerError("invalid_posting", "kind must be expense, income, refund, or transfer");
-    }
-    const recorded = recordTransaction(db, user.id, {
-      accountId: readString(body, "accountId"),
-      kind,
-      amountMinor: readMinor(body, "amountMinor"),
-      currency: readString(body, "currency"),
-      categoryId: readOptionalNullable(body, "categoryId"),
-      refundOfTransactionId:
-        kind === "refund" ? (readOptionalNullable(body, "refundOfTransactionId") ?? null) : undefined,
-      occurredAt,
-      description,
-      createdAt,
-    });
-    return c.json({ transactions: [recorded.transaction] }, 201);
+    const ids = readIds(body, "ids");
+    const updated = categorizeTransactions(db, user.id, ids, readNullableString(body, "categoryId"));
+    return c.json({ updated });
   });
 
   app.patch("/api/transactions/:id", async (c) => {
@@ -270,14 +276,11 @@ export function createApp(input: {
     return c.json({ transaction });
   });
 
-  app.post("/api/undo", (c) => {
+  app.delete("/api/transactions/:id", (c) => {
     const user = requireUser(db, c.get("telegramId"));
-    return c.json({ deleted: deleteLatestTransaction(db, user.id) });
-  });
-
-  app.get("/api/accounts", (c) => {
-    const user = requireUser(db, c.get("telegramId"));
-    return c.json({ accounts: listAccounts(db, user.id) });
+    const deleted = deleteTransaction(db, user.id, requiredParam(c.req.param("id")));
+    // Deleting twice is not an error: the row is gone either way.
+    return c.json({ deleted: deleted.map((transaction) => transaction.id) });
   });
 
   app.post("/api/accounts", async (c) => {
@@ -285,7 +288,8 @@ export function createApp(input: {
     const body = await readBody(c);
     const account = createAccount(db, user.id, {
       name: readText(body, "name"),
-      currency: readString(body, "currency"),
+      currency: readCurrency(body, "currency"),
+      createdAt: now().toISOString(),
     });
     return c.json({ account }, 201);
   });
@@ -297,31 +301,35 @@ export function createApp(input: {
     if (Object.hasOwn(body, "name")) patch.name = readText(body, "name");
     if (Object.hasOwn(body, "archived")) patch.archived = readBoolean(body, "archived");
     const account = updateAccount(db, user.id, requiredParam(c.req.param("id")), patch);
-    return c.json({ account });
-  });
-
-  app.get("/api/categories", (c) => {
-    const user = requireUser(db, c.get("telegramId"));
-    return c.json({ categories: listCategories(db, user.id) });
+    return c.json({ account, defaultAccountId: readUserFlags(db, user.id)?.defaultAccountId ?? null });
   });
 
   app.post("/api/categories", async (c) => {
     const user = requireUser(db, c.get("telegramId"));
     const body = await readBody(c);
-    const category = createCategory(db, user.id, { name: readText(body, "name") });
+    const category = createCategory(db, user.id, { name: readText(body, "name"), createdAt: now().toISOString() });
     return c.json({ category }, 201);
   });
 
-  app.post("/api/imports/preview", async (c) => {
+  app.patch("/api/categories/:id", async (c) => {
     const user = requireUser(db, c.get("telegramId"));
-    const request = await readImportRequest(c);
-    if (request.csv.length > 1_500_000) throw new LedgerError("invalid_posting", "File is too large");
-    return c.json(uploadJson(previewUpload(db, user, request.csv, request)));
+    const body = await readBody(c);
+    const category = renameCategory(db, user.id, requiredParam(c.req.param("id")), readText(body, "name"));
+    return c.json({ category });
   });
 
-  app.post("/api/imports/:id/commit", (c) => {
+  app.delete("/api/categories/:id", (c) => {
     const user = requireUser(db, c.get("telegramId"));
-    return c.json(commitStoredPreview(db, user, requiredParam(c.req.param("id"))));
+    return c.json(deleteCategory(db, user.id, requiredParam(c.req.param("id"))));
+  });
+
+  app.use("/*", async (c, next) => {
+    await next();
+    if (c.req.path.startsWith("/api") || c.req.path === "/healthz" || c.res.status !== 200) return;
+    // Vite puts a content hash in every file name under assets/, so those never change. The page itself must
+    // be revalidated, or a new release would not be picked up.
+    const immutable = c.req.path.startsWith("/assets/");
+    c.res.headers.set("Cache-Control", immutable ? "public, max-age=31536000, immutable" : "no-cache");
   });
 
   app.use("/*", async (c, next) => {
@@ -332,9 +340,12 @@ export function createApp(input: {
 
   app.notFound((c) => {
     if (c.req.path.startsWith("/api")) return c.json({ error: "Not found", code: "not_found" }, 404);
+    // A missing hashed asset must be a 404, not the page: otherwise a stale client caches HTML as script.
+    if (c.req.method !== "GET" || c.req.path.startsWith("/assets/")) return c.text("Not found", 404);
     const index = resolve(dist, "index.html");
-    if (c.req.method === "GET" && existsSync(index)) return c.html(readFileSync(index, "utf8"));
-    return c.text("Not found", 404);
+    if (indexHtml === null && existsSync(index)) indexHtml = readFileSync(index, "utf8");
+    if (indexHtml === null) return c.text("Not found", 404);
+    return c.html(indexHtml);
   });
 
   return app;
@@ -346,142 +357,52 @@ function requireUser(db: Mon22rDb, telegramId: number): User {
   return user;
 }
 
-function uploadJson(result: UploadResult): Record<string, unknown> {
-  switch (result.type) {
-    case "empty":
-      return { status: "empty" };
-    case "mapping_required":
-      return { status: "mapping_required", fingerprint: result.fingerprint, headers: result.headers };
-    case "mixed_currency":
-      return { status: "mixed_currency" };
-    case "no_account":
-      return { status: "no_account", currency: result.currency };
-    case "currency_mismatch":
-      return {
-        status: "currency_mismatch",
-        accountName: result.accountName,
-        accountCurrency: result.accountCurrency,
-        fileCurrency: result.fileCurrency,
-      };
-    case "counts":
-      return {
-        status: "preview",
-        id: null,
-        source: result.source,
-        counts: result.counts,
-        rows: result.rows.map(publicRow),
-      };
-    case "choose_account":
-      return {
-        status: "account_required",
-        id: result.previewId,
-        accounts: result.accounts,
-        counts: result.counts,
-        rows: result.rows.map(publicRow),
-      };
-    case "ready":
-      return {
-        status: "preview",
-        id: result.previewId,
-        source: result.source,
-        accountId: result.account.id,
-        counts: result.counts,
-        rows: result.rows.map(publicRow),
-      };
-  }
-}
-
-function publicRow(row: PreviewRow): {
-  status: PreviewRow["status"];
-  reason: PreviewRow["reason"];
-  externalKey: string | null;
-  bookedAt: string | null;
-  amountMinor: number | null;
-  currency: string | null;
-  direction: "inflow" | "outflow" | null;
-  description: string | null;
-} {
-  return {
-    status: row.status,
-    reason: row.reason,
-    externalKey: row.line?.externalKey ?? null,
-    bookedAt: row.line?.bookedAt ?? null,
-    amountMinor: row.line?.amountMinor ?? null,
-    currency: row.line?.currency ?? null,
-    direction: row.line?.direction ?? null,
-    description: row.line?.description ?? null,
-  };
-}
-
 function ledgerStatus(code: string): 400 | 404 | 409 {
   if (code === "not_found" || code === "account_not_found" || code === "category_not_found") return 404;
   if (code === "conflict") return 409;
   return 400;
 }
 
-async function readBody(c: { req: { json: () => Promise<unknown> } }): Promise<Record<string, unknown>> {
-  try {
-    const value = await c.req.json();
-    if (!isRecord(value)) throw new LedgerError("invalid_posting", "JSON body is required");
-    return value;
-  } catch (error) {
-    if (error instanceof LedgerError) throw error;
-    throw new LedgerError("invalid_posting", "JSON body is required");
+/** A sentence the Mini App can show as is. Internal wording stays in the code. */
+function ledgerMessage(error: LedgerError): string {
+  switch (error.code) {
+    case "not_found":
+      return "Запись не найдена. Возможно, она уже удалена.";
+    case "account_not_found":
+      return "Счёт не найден.";
+    case "category_not_found":
+      return "Категория не найдена.";
+    case "conflict":
+      return "Такое название уже есть.";
+    case "currency_mismatch":
+      return "Валюта счёта не совпадает с валютой записи.";
+    case "invalid_currency":
+      return "Валюта не распознана.";
+    case "invalid_time_zone":
+      return "Часовой пояс не распознан.";
+    case "invalid_amount":
+      return "Сумма не распознана.";
+    case "invalid_month":
+      return "Месяц указан неверно.";
+    default:
+      return "Запрос не выполнен: проверьте поля.";
   }
 }
 
-async function readImportRequest(c: {
-  req: {
-    header: (name: string) => string | undefined;
-    json: () => Promise<unknown>;
-    text: () => Promise<string>;
-    parseBody: () => Promise<Record<string, unknown>>;
-  };
-}): Promise<{ csv: string; accountId?: string; profileName?: string; mapping?: unknown }> {
-  const type = c.req.header("content-type") ?? "";
-  if (type.includes("application/json")) {
-    const body = await readBody(c);
-    return {
-      csv: readCsv(body),
-      accountId: readOptionalString(body, "accountId"),
-      profileName: readOptionalText(body, "profileName"),
-      mapping: Object.hasOwn(body, "mapping") ? body.mapping : undefined,
-    };
+async function readBody(c: AppContext): Promise<Record<string, unknown>> {
+  let value: unknown;
+  try {
+    value = await c.req.json();
+  } catch (error) {
+    if (error instanceof HTTPException) throw error;
+    throw new LedgerError("invalid_posting", "JSON body is required");
   }
-  if (type.includes("multipart/form-data")) {
-    const body = await c.req.parseBody();
-    const file = body.file;
-    const csvField = body.csv;
-    let csv = "";
-    if (typeof csvField === "string") csv = csvField;
-    else if (isTextFile(file)) csv = await file.text();
-    else throw new LedgerError("invalid_posting", "CSV file is required");
-    const mappingRaw = typeof body.mapping === "string" ? body.mapping : undefined;
-    return {
-      csv,
-      accountId: typeof body.accountId === "string" ? body.accountId : undefined,
-      profileName: typeof body.profileName === "string" ? body.profileName : undefined,
-      mapping: mappingRaw === undefined ? undefined : (JSON.parse(mappingRaw) as unknown),
-    };
-  }
-  if (type.includes("text/csv") || type.includes("text/plain")) {
-    const mappingHeader = c.req.header("x-mapping");
-    return {
-      csv: await c.req.text(),
-      accountId: c.req.header("x-account-id"),
-      profileName: c.req.header("x-profile-name"),
-      mapping: mappingHeader === undefined ? undefined : (JSON.parse(mappingHeader) as unknown),
-    };
-  }
-  throw new LedgerError("invalid_posting", "JSON or CSV body is required");
+  if (!isRecord(value)) throw new LedgerError("invalid_posting", "JSON body is required");
+  return value;
 }
 
 function readMonthQuery(value: string | undefined): CalendarMonth {
   return parseMonth(value, "month must be YYYY-MM");
-}
-
-function readMonthValue(body: Record<string, unknown>, key: string): CalendarMonth {
-  return parseMonth(readString(body, key), `${key} must be YYYY-MM`);
 }
 
 function parseMonth(value: string | undefined, message: string): CalendarMonth {
@@ -492,12 +413,6 @@ function parseMonth(value: string | undefined, message: string): CalendarMonth {
   return assertCalendarMonth({ year: Number(year), month: Number(month) });
 }
 
-function readRecurrence(body: Record<string, unknown>): PlanRecurrence {
-  const value = readString(body, "recurrence");
-  if (value === "monthly" || value === "once") return value;
-  throw new LedgerError("invalid_plan", "recurrence must be monthly or once");
-}
-
 function readStatus(body: Record<string, unknown>): ExpectationStatus {
   const value = readString(body, "status");
   if (EXPECTATION_STATUSES.includes(value as ExpectationStatus)) return value as ExpectationStatus;
@@ -506,28 +421,27 @@ function readStatus(body: Record<string, unknown>): ExpectationStatus {
 
 function readString(body: Record<string, unknown>, key: string): string {
   const value = body[key];
-  if (typeof value !== "string" || value.trim() === "" || value.trim() !== value) {
+  if (typeof value !== "string" || value.trim() === "" || value.trim() !== value || value.length > 200) {
     throw new LedgerError("invalid_posting", `${key} is required`);
+  }
+  return value;
+}
+
+/** An ISO 4217 code the runtime knows, so a typo cannot become an account currency. */
+function readCurrency(body: Record<string, unknown>, key: string): string {
+  const value = readString(body, key);
+  if (!/^[A-Z]{3}$/.test(value) || !isKnownCurrency(value)) {
+    throw new LedgerError("invalid_currency", `${key} must be an ISO 4217 code`);
   }
   return value;
 }
 
 function readText(body: Record<string, unknown>, key: string): string {
   const value = body[key];
-  if (typeof value !== "string" || value.trim() === "") throw new LedgerError("invalid_posting", `${key} is required`);
+  if (typeof value !== "string" || value.trim() === "" || value.trim().length > 80) {
+    throw new LedgerError("invalid_posting", `${key} is required`);
+  }
   return value.trim();
-}
-
-function readOptionalText(body: Record<string, unknown>, key: string): string | undefined {
-  if (!Object.hasOwn(body, key) || body[key] === undefined || body[key] === null) return undefined;
-  return readText(body, key);
-}
-
-function readCsv(body: Record<string, unknown>): string {
-  const value = body.csv;
-  if (typeof value !== "string" || value.trim().length === 0)
-    throw new LedgerError("invalid_posting", "csv is required");
-  return value;
 }
 
 function readOptionalString(body: Record<string, unknown>, key: string): string | undefined {
@@ -540,9 +454,19 @@ function readNullableString(body: Record<string, unknown>, key: string): string 
   return readString(body, key);
 }
 
-function readOptionalNullable(body: Record<string, unknown>, key: string): string | null | undefined {
-  if (!Object.hasOwn(body, key)) return undefined;
-  return readNullableString(body, key);
+function readIds(body: Record<string, unknown>, key: string): string[] {
+  const value = body[key];
+  if (!Array.isArray(value) || value.length === 0 || value.length > BULK_LIMIT) {
+    throw new LedgerError("invalid_posting", `${key} must list 1 to ${BULK_LIMIT} ids`);
+  }
+  const ids: string[] = [];
+  for (const item of value) {
+    if (typeof item !== "string" || item.length === 0 || item.length > 64) {
+      throw new LedgerError("invalid_posting", `${key} must list ids`);
+    }
+    ids.push(item);
+  }
+  return ids;
 }
 
 function readMinor(body: Record<string, unknown>, key: string): number {
@@ -579,15 +503,12 @@ function readOptionalBoolean(body: Record<string, unknown>, key: string): boolea
 }
 
 function requiredParam(value: string | undefined): string {
-  if (value === undefined || value.length === 0) throw new LedgerError("invalid_posting", "Id is required");
+  if (value === undefined || value.length === 0 || value.length > 64) {
+    throw new LedgerError("invalid_posting", "Id is required");
+  }
   return value;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function isTextFile(value: unknown): value is { text: () => Promise<string> } {
-  if (typeof value !== "object" || value === null || !("text" in value)) return false;
-  return typeof value.text === "function";
 }

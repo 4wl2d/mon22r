@@ -39,7 +39,9 @@ export { assertFxRate, estimateInHomeCurrency, type FxRate, type HomeCurrencyEst
 export {
   assertCurrency,
   assertPositiveMinor,
+  CURRENCY_TOKEN,
   type CurrencyCode,
+  isKnownCurrency,
   type Money,
   minorExponent,
   money,
@@ -59,6 +61,7 @@ export {
   type ZonedDateTimeInput,
   zonedDateTimeToUtc,
 } from "./month.js";
+export { noteKey } from "./notes.js";
 export {
   type CategorySpend,
   type CurrencyTotals,

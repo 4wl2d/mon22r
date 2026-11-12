@@ -7,6 +7,7 @@ import {
   readImportPreview,
   readUserFlags,
   recordTransaction,
+  rememberedCategoryId,
   removeImportPreview,
   saveStatementProfile,
   updateImportPreviewAccount,
@@ -171,7 +172,9 @@ export function commitStoredPreview(
       source: preview.source,
       timeZone: user.timeZone,
       lines,
-      record: (row) => recordTransaction(db, user.id, row),
+      // A line whose description was categorized before gets the same category, like a chat entry.
+      record: (row) =>
+        recordTransaction(db, user.id, { ...row, categoryId: rememberedCategoryId(db, user.id, row.description) }),
     });
     removeImportPreview(db, user.id, preview.id);
     return result;

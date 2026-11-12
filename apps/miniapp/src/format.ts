@@ -47,6 +47,15 @@ export function monthKey(point: MonthPoint): string {
   return `${String(point.year).padStart(4, "0")}-${String(point.month).padStart(2, "0")}`;
 }
 
+export function sameMonth(left: MonthPoint, right: MonthPoint): boolean {
+  return left.year === right.year && left.month === right.month;
+}
+
+/** Negative when `left` is the earlier month. */
+export function compareMonths(left: MonthPoint, right: MonthPoint): number {
+  return left.year * 12 + left.month - (right.year * 12 + right.month);
+}
+
 export function addMonths(point: MonthPoint, delta: number): MonthPoint {
   const index = point.year * 12 + (point.month - 1) + delta;
   return { year: Math.floor(index / 12), month: (index % 12) + 1 };
@@ -115,6 +124,16 @@ export function formatMinor(amountMinor: number, currency: string): string {
   const negative = amountMinor < 0;
   const body = formatMajor(Math.abs(amountMinor), currency, true);
   return `${negative ? "−" : ""}${body} ${currency}`;
+}
+
+/** The number without the currency code, for places where the code is shown once nearby. */
+export function formatAmount(amountMinor: number, currency: string): string {
+  return `${amountMinor < 0 ? "−" : ""}${formatMajor(Math.abs(amountMinor), currency, true)}`;
+}
+
+/** A signed amount for a list of movements: `+` for money in, `−` for money out. */
+export function formatSigned(amountMinor: number, currency: string, direction: "inflow" | "outflow"): string {
+  return `${direction === "inflow" ? "+" : "−"}${formatMajor(Math.abs(amountMinor), currency, true)} ${currency}`;
 }
 
 export function formatMinorInput(amountMinor: number, currency: string): string {

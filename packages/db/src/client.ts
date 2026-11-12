@@ -24,6 +24,9 @@ export function openDatabase(filename: string): Mon22rDb {
     sqlite,
     orm,
     close() {
+      if (!sqlite.open) return;
+      // Fold the write-ahead log into the main file so a plain file copy taken after a clean stop is complete.
+      if (filename !== ":memory:") sqlite.pragma("wal_checkpoint(TRUNCATE)");
       sqlite.close();
     },
   };

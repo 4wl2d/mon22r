@@ -17,26 +17,32 @@ import type {
 } from "@mon22r/domain";
 
 /**
- * HTTP contract for the mon22r server.
+ * HTTP contract for the mon22r server. Every call sends `Authorization: tma <raw init data>`.
  *
- * Authorization: `tma <raw init data>`.
- * GET /api/me -> { ready, telegramId, user, onboardingStep, accounts, categories }
- *   ready is true only after onboarding. onboardingStep is currency, timezone, accounts, or null.
- *   user may already exist while ready is false.
- * POST /api/setup { homeCurrency, timeZone?, starterAccounts? } -> { user, accounts, onboardingStep: null }
- * GET /api/month?month=YYYY-MM -> { month: { year, month }, homeCurrency, timeZone, totalsByCurrency, categorySpend, expectations, estimateInHomeCurrency }
- * GET /api/plans?month=YYYY-MM -> { month, plans, expectations }
- * PATCH /api/plans/:id { amountMinor, currency } -> { plan }
- * POST /api/plans/copy { fromMonth, toMonth } -> { month, expectations }
- * PATCH /api/expectations/:id { status } -> { expectation }
- * GET /api/transactions?month=YYYY-MM -> { transactions }
- * PATCH /api/transactions/:id { categoryId?, accountId? } -> { transaction }
- * GET /api/accounts -> { accounts }; POST -> 201 { account }; PATCH -> { account }
- * GET /api/categories -> { categories }; POST -> 201 { category }
- * Errors are { error, code }. `error` is a sentence. `code` is not shown.
+ * GET    /api/me                         -> { ready, user, onboardingStep, accounts, categories, defaultAccountId, version }
+ * POST   /api/setup                      { homeCurrency, timeZone?, starterAccounts? } -> { user, accounts, onboardingStep: null }
+ * PATCH  /api/settings                   { homeCurrency?, timeZone?, defaultAccountId? } -> { user, defaultAccountId }
+ * GET    /api/month?month=YYYY-MM        -> { month, totalsByCurrency, categorySpend, expectations, plans, estimateInHomeCurrency, ... }
+ * PATCH  /api/plans/:id                  { amountMinor?, currency?, active? } -> { plan }
+ * PATCH  /api/expectations/:id           { status } -> { expectation }
+ * GET    /api/transactions?month=YYYY-MM -> { transactions }
+ * PATCH  /api/transactions/:id           { categoryId?, accountId? } -> { transaction }
+ * POST   /api/transactions/categorize    { ids, categoryId } -> { updated }
+ * DELETE /api/transactions/:id           -> { deleted: [ids] }
+ * POST   /api/accounts                   { name, currency } -> 201 { account }
+ * PATCH  /api/accounts/:id               { name?, archived? } -> { account, defaultAccountId }
+ * POST   /api/categories                 { name } -> 201 { category }
+ * PATCH  /api/categories/:id             { name } -> { category }
+ * DELETE /api/categories/:id             -> { cleared }
+ * Errors are { error, code }. `error` is a sentence that can be shown as is.
  *
  * Money stays in minor units. Currencies are not added together. A refund keeps a positive amountMinor.
+ * Every answer is checked field by field before the interface uses it.
  */
+
+const REQUEST_TIMEOUT_MS = 15_000;
+const RETRY_DELAY_MS = 500;
+const UNREADABLE = "Не удалось прочитать ответ.";
 
 export class ApiError extends Error {
   readonly status: number;
@@ -52,39 +58,26 @@ export type OnboardingStep = "currency" | "timezone" | "accounts";
 
 export type Me = {
   readonly ready: boolean;
-  readonly telegramId: number | null;
   readonly user: User | null;
   readonly onboardingStep: OnboardingStep | null;
   readonly accounts: readonly Account[];
   readonly categories: readonly Category[];
+  readonly defaultAccountId: string | null;
+  readonly version: string;
 };
 
 export type MonthView = {
   readonly totalsByCurrency: readonly CurrencyTotals[];
   readonly categorySpend: readonly CategorySpend[];
+  readonly expectations: readonly IncomeExpectation[];
+  readonly plans: readonly IncomePlan[];
   readonly estimateInHomeCurrency: HomeCurrencyEstimate | null;
-};
-
-export type PlanRow = {
-  readonly plan: IncomePlan | null;
-  readonly expectation: IncomeExpectation | null;
 };
 
 export type SetupInput = {
   readonly homeCurrency: string;
   readonly timeZone: string;
   readonly starterAccounts: boolean;
-};
-
-export type NewPlan = {
-  readonly name: string;
-  readonly amountMinor: number;
-  readonly currency: string;
-  readonly dayOfMonth: number;
-  readonly accountId: string | null;
-  readonly recurrence: PlanRecurrence;
-  readonly startYear: number;
-  readonly startMonth: number;
 };
 
 let initData = "";
@@ -95,7 +88,9 @@ export function setInitData(value: string): void {
 
 export function errorText(error: unknown, fallback: string): string {
   if (error instanceof ApiError) {
-    if (error.status === 401 || error.status === 403) return "Нет доступа.";
+    if (error.status === 401 || error.status === 403) {
+      return "Сессия истекла. Закройте приложение и откройте его из чата снова.";
+    }
     const message = error.message.trim();
     if (message.length > 0 && message.length <= 180 && !message.includes("\n")) return message;
   }
@@ -107,146 +102,137 @@ export async function getMe(): Promise<Me> {
 }
 
 export async function setup(input: SetupInput): Promise<User> {
-  const body = await request("/setup", {
-    method: "POST",
-    body: JSON.stringify({
-      homeCurrency: input.homeCurrency,
-      timeZone: input.timeZone,
-      starterAccounts: input.starterAccounts,
-    }),
-  });
-  const row = asRecord(body);
+  const row = asRecord(await send("POST", "/setup", input));
   const user = readUser(row.user);
-  if (!user || row.onboardingStep !== null) throw new ApiError(200, "Не удалось прочитать ответ.");
+  if (!user || row.onboardingStep !== null) throw new ApiError(200, UNREADABLE);
   return user;
+}
+
+export async function updateSettings(patch: {
+  readonly homeCurrency?: string;
+  readonly timeZone?: string;
+  readonly defaultAccountId?: string | null;
+}): Promise<{ readonly user: User; readonly defaultAccountId: string | null }> {
+  const row = asRecord(await send("PATCH", "/settings", patch));
+  return { user: required(readUser(row.user)), defaultAccountId: readNullableId(row.defaultAccountId) };
 }
 
 export async function getMonth(month: string): Promise<MonthView> {
   return readMonth(await request(`/month?month=${encodeURIComponent(month)}`));
 }
 
-export async function getPlans(month: string): Promise<readonly PlanRow[]> {
-  return readPlans(await request(`/plans?month=${encodeURIComponent(month)}`));
-}
-
-export async function createPlan(input: NewPlan): Promise<IncomePlan> {
-  const body = await request("/plans", {
-    method: "POST",
-    body: JSON.stringify(input),
-  });
-  return readRequired(readPlan(asRecord(body).plan), "Не удалось прочитать ответ.");
-}
-
-export async function updatePlanAmount(id: string, amountMinor: number, currency: string): Promise<IncomePlan> {
-  const body = await request(`/plans/${encodeURIComponent(id)}`, {
-    method: "PATCH",
-    body: JSON.stringify({ amountMinor, currency }),
-  });
-  return readRequired(readPlan(asRecord(body).plan), "Не удалось прочитать ответ.");
-}
-
-export async function copyPlans(fromMonth: string, toMonth: string): Promise<void> {
-  const body = await request("/plans/copy", {
-    method: "POST",
-    body: JSON.stringify({ fromMonth, toMonth }),
-  });
-  const row = asRecord(body);
-  requireArray(row, "expectations");
-  const month = asRecord(row.month);
-  if (readInteger(month.year) === null || readInteger(month.month) === null) {
-    throw new ApiError(200, "Не удалось прочитать ответ.");
-  }
+export async function updatePlan(
+  id: string,
+  patch: { readonly amountMinor?: number; readonly currency?: string; readonly active?: boolean },
+): Promise<IncomePlan> {
+  const body = await send("PATCH", `/plans/${encodeURIComponent(id)}`, patch);
+  return required(readPlan(asRecord(body).plan));
 }
 
 export async function updateExpectationStatus(id: string, status: ExpectationStatus): Promise<IncomeExpectation> {
-  const body = await request(`/expectations/${encodeURIComponent(id)}`, {
-    method: "PATCH",
-    body: JSON.stringify({ status }),
-  });
-  return readRequired(readExpectation(asRecord(body).expectation), "Не удалось прочитать ответ.");
+  const body = await send("PATCH", `/expectations/${encodeURIComponent(id)}`, { status });
+  return required(readExpectation(asRecord(body).expectation));
 }
 
 export async function getTransactions(month: string): Promise<readonly Transaction[]> {
   const body = await request(`/transactions?month=${encodeURIComponent(month)}`);
-  return readList(body, "transactions", readTransaction);
+  return readRows(requireArray(asRecord(body), "transactions"), readTransaction);
 }
 
 export async function updateTransaction(
   id: string,
   patch: { readonly categoryId?: string | null; readonly accountId?: string },
 ): Promise<Transaction> {
-  const body = await request(`/transactions/${encodeURIComponent(id)}`, {
-    method: "PATCH",
-    body: JSON.stringify(patch),
-  });
-  return readRequired(readTransaction(asRecord(body).transaction), "Не удалось прочитать ответ.");
+  const body = await send("PATCH", `/transactions/${encodeURIComponent(id)}`, patch);
+  return required(readTransaction(asRecord(body).transaction));
 }
 
-export async function getAccounts(): Promise<readonly Account[]> {
-  const body = await request("/accounts");
-  return readList(body, "accounts", readAccount);
+/** Sets or clears the category of many transactions. Returns how many rows changed. */
+export async function categorizeTransactions(ids: readonly string[], categoryId: string | null): Promise<number> {
+  const body = await send("POST", "/transactions/categorize", { ids, categoryId });
+  return required(readInteger(asRecord(body).updated));
+}
+
+/** Returns the ids that were removed: both legs for a transfer, nothing when it was already gone. */
+export async function deleteTransaction(id: string): Promise<readonly string[]> {
+  const body = await send("DELETE", `/transactions/${encodeURIComponent(id)}`);
+  return readRows(requireArray(asRecord(body), "deleted"), readId);
 }
 
 export async function createAccount(input: { readonly name: string; readonly currency: string }): Promise<Account> {
-  const body = await request("/accounts", {
-    method: "POST",
-    body: JSON.stringify(input),
-  });
-  return readRequired(readAccount(asRecord(body).account), "Не удалось прочитать ответ.");
+  const body = await send("POST", "/accounts", input);
+  return required(readAccount(asRecord(body).account));
 }
 
 export async function updateAccount(
   id: string,
   patch: { readonly name?: string; readonly archived?: boolean },
-): Promise<Account> {
-  const body = await request(`/accounts/${encodeURIComponent(id)}`, {
-    method: "PATCH",
-    body: JSON.stringify(patch),
-  });
-  return readRequired(readAccount(asRecord(body).account), "Не удалось прочитать ответ.");
-}
-
-export async function getCategories(): Promise<readonly Category[]> {
-  const body = await request("/categories");
-  return readList(body, "categories", readCategory);
+): Promise<{ readonly account: Account; readonly defaultAccountId: string | null }> {
+  const row = asRecord(await send("PATCH", `/accounts/${encodeURIComponent(id)}`, patch));
+  return { account: required(readAccount(row.account)), defaultAccountId: readNullableId(row.defaultAccountId) };
 }
 
 export async function createCategory(name: string): Promise<Category> {
-  const body = await request("/categories", {
-    method: "POST",
-    body: JSON.stringify({ name }),
-  });
-  return readRequired(readCategory(asRecord(body).category), "Не удалось прочитать ответ.");
+  const body = await send("POST", "/categories", { name });
+  return required(readCategory(asRecord(body).category));
 }
 
-async function request(path: string, init?: RequestInit): Promise<unknown> {
-  const headers = new Headers(init?.headers);
-  headers.set("Accept", "application/json");
-  headers.set("Authorization", `tma ${initData}`);
+export async function renameCategory(id: string, name: string): Promise<Category> {
+  const body = await send("PATCH", `/categories/${encodeURIComponent(id)}`, { name });
+  return required(readCategory(asRecord(body).category));
+}
+
+export async function deleteCategory(id: string): Promise<void> {
+  await send("DELETE", `/categories/${encodeURIComponent(id)}`);
+}
+
+function send(method: "POST" | "PATCH" | "DELETE", path: string, body?: unknown): Promise<unknown> {
+  return request(path, { method, body: body === undefined ? undefined : JSON.stringify(body) });
+}
+
+/**
+ * One API call with a time limit. A read that fails on the network is tried once more;
+ * a write is not, because the first attempt may have reached the server.
+ */
+async function request(path: string, init?: { method?: string; body?: string }, attempt = 0): Promise<unknown> {
+  const headers = new Headers({ Accept: "application/json", Authorization: `tma ${initData}` });
   if (init?.body !== undefined) headers.set("Content-Type", "application/json");
+  const abort = new AbortController();
+  const timer = setTimeout(() => abort.abort(), REQUEST_TIMEOUT_MS);
   let response: Response;
   try {
     response = await fetch(`/api${path}`, {
-      ...init,
+      method: init?.method ?? "GET",
+      body: init?.body,
       headers,
       cache: "no-store",
-    } as RequestInit);
+      signal: abort.signal,
+    });
   } catch {
-    throw new ApiError(0, "Нет соединения.");
+    const isRead = init?.method === undefined;
+    if (isRead && attempt === 0 && !abort.signal.aborted) {
+      await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_MS));
+      return request(path, init, 1);
+    }
+    throw new ApiError(0, abort.signal.aborted ? "Сервер не ответил. Попробуйте ещё раз." : "Нет соединения.");
+  } finally {
+    clearTimeout(timer);
   }
   const text = await response.text();
-  const body = text.trim() === "" ? null : parseJson(text);
+  const body = text.trim() === "" ? null : parseJson(text, response.ok);
   if (!response.ok) {
     throw new ApiError(response.status, messageFromBody(body) ?? "Не удалось выполнить запрос.");
   }
   return body;
 }
 
-function parseJson(text: string): unknown {
+function parseJson(text: string, strict: boolean): unknown {
   try {
     return JSON.parse(text) as unknown;
   } catch {
-    throw new ApiError(200, "Не удалось прочитать ответ.");
+    // A proxy error page is not JSON; the status code already says what happened.
+    if (!strict) return null;
+    throw new ApiError(200, UNREADABLE);
   }
 }
 
@@ -260,64 +246,32 @@ function messageFromBody(body: unknown): string | null {
 
 function readMe(body: unknown): Me {
   const row = asRecord(body);
-  if (typeof row.ready !== "boolean") throw new ApiError(200, "Не удалось прочитать ответ.");
+  if (typeof row.ready !== "boolean") throw new ApiError(200, UNREADABLE);
   const user = row.user === null ? null : readUser(row.user);
-  if (row.user !== null && user === null) throw new ApiError(200, "Не удалось прочитать ответ.");
-  if (row.ready && user === null) throw new ApiError(200, "Не удалось прочитать ответ.");
-  const onboardingStep = readOnboardingStep(row.onboardingStep);
+  if (row.user !== null && user === null) throw new ApiError(200, UNREADABLE);
+  if (row.ready && user === null) throw new ApiError(200, UNREADABLE);
   return {
     ready: row.ready,
-    telegramId: readTelegramId(row.telegramId),
     user,
-    onboardingStep,
+    onboardingStep: readOnboardingStep(row.onboardingStep),
     accounts: readRows(requireArray(row, "accounts"), readAccount),
     categories: readRows(requireArray(row, "categories"), readCategory),
+    defaultAccountId: readNullableId(row.defaultAccountId),
+    version: typeof row.version === "string" ? row.version : "",
   };
 }
 
 function readMonth(body: unknown): MonthView {
   const row = asRecord(body);
   const month = asRecord(row.month);
-  if (readInteger(month.year) === null || readInteger(month.month) === null) {
-    throw new ApiError(200, "Не удалось прочитать ответ.");
-  }
-  if (readCurrency(row.homeCurrency) === null) throw new ApiError(200, "Не удалось прочитать ответ.");
-  if (typeof row.timeZone !== "string" || row.timeZone.length === 0) {
-    throw new ApiError(200, "Не удалось прочитать ответ.");
-  }
-  requireArray(row, "expectations");
+  if (readInteger(month.year) === null || readInteger(month.month) === null) throw new ApiError(200, UNREADABLE);
   return {
     totalsByCurrency: readRows(requireArray(row, "totalsByCurrency"), readCurrencyTotals),
     categorySpend: readRows(requireArray(row, "categorySpend"), readCategorySpend),
+    expectations: readRows(requireArray(row, "expectations"), readExpectation),
+    plans: readRows(requireArray(row, "plans"), readPlan),
     estimateInHomeCurrency: readEstimate(row.estimateInHomeCurrency),
   };
-}
-
-function readPlans(body: unknown): readonly PlanRow[] {
-  const row = asRecord(body);
-  const month = asRecord(row.month);
-  if (readInteger(month.year) === null || readInteger(month.month) === null) {
-    throw new ApiError(200, "Не удалось прочитать ответ.");
-  }
-  const plans = readRows(requireArray(row, "plans"), readPlan);
-  const expectations = readRows(requireArray(row, "expectations"), readExpectation);
-  const byPlan = new Map<string, IncomeExpectation>();
-  for (const expectation of expectations) {
-    if (expectation.planId) byPlan.set(expectation.planId, expectation);
-  }
-  const matched = new Set<string>();
-  const rows: PlanRow[] = [];
-  for (const plan of plans) {
-    const expectation = byPlan.get(plan.id) ?? null;
-    if (expectation) matched.add(expectation.id);
-    rows.push({ plan, expectation });
-  }
-  for (const expectation of expectations) {
-    if (matched.has(expectation.id)) continue;
-    if (expectation.planId !== null && plans.some((plan) => plan.id === expectation.planId)) continue;
-    rows.push({ plan: null, expectation });
-  }
-  return rows.sort(comparePlans);
 }
 
 function readPlan(value: unknown): IncomePlan | null {
@@ -426,34 +380,23 @@ function readCategorySpend(value: unknown): CategorySpend | null {
   const currency = readCurrency(row.currency);
   const spentMinor = readInteger(row.spentMinor);
   if (!currency || spentMinor === null || !("categoryId" in row)) return null;
-  return {
-    categoryId: readNullableId(row.categoryId),
-    currency,
-    spentMinor,
-  };
+  return { categoryId: readNullableId(row.categoryId), currency, spentMinor };
 }
 
 function readEstimate(value: unknown): HomeCurrencyEstimate | null {
   if (value === null) return null;
-  if (value === undefined) throw new ApiError(200, "Не удалось прочитать ответ.");
+  if (value === undefined) throw new ApiError(200, UNREADABLE);
   const estimate = asRecord(value);
-  if (estimate.kind !== "estimate") throw new ApiError(200, "Не удалось прочитать ответ.");
+  if (estimate.kind !== "estimate") throw new ApiError(200, UNREADABLE);
   const minor = readInteger(estimate.minor);
   const currency = readCurrency(estimate.currency);
   const asOf = readNullableText(estimate.asOf);
   const source = readNullableText(estimate.source);
   const usedConversion = readBoolean(estimate.usedConversion);
   if (minor === null || !currency || asOf === undefined || source === undefined || usedConversion === null) {
-    throw new ApiError(200, "Не удалось прочитать ответ.");
+    throw new ApiError(200, UNREADABLE);
   }
-  return {
-    kind: "estimate",
-    minor,
-    currency,
-    asOf,
-    source,
-    usedConversion,
-  };
+  return { kind: "estimate", minor, currency, asOf, source, usedConversion };
 }
 
 function readTransaction(value: unknown): Transaction | null {
@@ -538,52 +481,28 @@ function readUser(value: unknown): User | null {
   if (!id || !homeCurrency || !timeZone) return null;
   if (row.telegramId !== null && row.telegramId !== undefined && readInteger(row.telegramId) === null) return null;
   const telegramId = row.telegramId === null || row.telegramId === undefined ? null : readInteger(row.telegramId);
-  return {
-    id,
-    telegramId,
-    homeCurrency,
-    timeZone,
-    createdAt: typeof row.createdAt === "string" ? row.createdAt : "",
-  };
-}
-
-function readList<T>(body: unknown, key: string, read: (value: unknown) => T | null): readonly T[] {
-  return readRows(requireArray(asRecord(body), key), read);
+  return { id, telegramId, homeCurrency, timeZone, createdAt: typeof row.createdAt === "string" ? row.createdAt : "" };
 }
 
 function readRows<T>(items: readonly unknown[], read: (value: unknown) => T | null): readonly T[] {
   const rows: T[] = [];
   for (const item of items) {
     const row = read(item);
-    if (!row) throw new ApiError(200, "Не удалось прочитать ответ.");
+    if (row === null) throw new ApiError(200, UNREADABLE);
     rows.push(row);
   }
   return rows;
 }
 
-function readRequired<T>(value: T | null, message: string): T {
-  if (value === null) throw new ApiError(200, message);
+function required<T>(value: T | null): T {
+  if (value === null) throw new ApiError(200, UNREADABLE);
   return value;
 }
 
 function requireArray(row: Record<string, unknown>, key: string): unknown[] {
   const value = row[key];
-  if (!Array.isArray(value)) throw new ApiError(200, "Не удалось прочитать ответ.");
+  if (!Array.isArray(value)) throw new ApiError(200, UNREADABLE);
   return value;
-}
-
-function comparePlans(left: PlanRow, right: PlanRow): number {
-  const day = planDay(left) - planDay(right);
-  if (day !== 0) return day;
-  return planName(left).localeCompare(planName(right), "ru");
-}
-
-function planDay(row: PlanRow): number {
-  return row.plan?.dayOfMonth ?? row.expectation?.dayOfMonth ?? 0;
-}
-
-function planName(row: PlanRow): string {
-  return row.plan?.name ?? row.expectation?.name ?? "";
 }
 
 function readImport(value: unknown): ImportIdentity | null | undefined {
@@ -619,14 +538,7 @@ function readStatus(value: unknown): ExpectationStatus | null {
 function readOnboardingStep(value: unknown): OnboardingStep | null {
   if (value === null) return null;
   if (value === "currency" || value === "timezone" || value === "accounts") return value;
-  throw new ApiError(200, "Не удалось прочитать ответ.");
-}
-
-function readTelegramId(value: unknown): number | null {
-  if (value === null) return null;
-  const id = readInteger(value);
-  if (id === null) throw new ApiError(200, "Не удалось прочитать ответ.");
-  return id;
+  throw new ApiError(200, UNREADABLE);
 }
 
 function readCurrency(value: unknown): CurrencyCode | null {

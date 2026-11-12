@@ -1,5 +1,28 @@
+export { backupDatabase, type DatabaseFileReport, inspectDatabaseFile, markCleanStop } from "./backup.js";
+export {
+  categorizeTransactions,
+  deleteCategory,
+  findCategoryByName,
+  lastManualAccountId,
+  listCategoriesByUse,
+  rememberedCategoryId,
+  renameCategory,
+} from "./categories.js";
 export { type Mon22rDb, openDatabase } from "./client.js";
-export { initialSchemaSql, MIGRATION_002, MIGRATION_ID, migrate, migration002Sql } from "./migrate.js";
+export {
+  fillNoteKeys,
+  initialSchemaSql,
+  MIGRATION_002,
+  MIGRATION_003,
+  MIGRATION_ID,
+  MIGRATIONS,
+  type Migration,
+  type MigrationResult,
+  migrate,
+  migration002Sql,
+  migration003Sql,
+  SchemaTooNewError,
+} from "./migrate.js";
 export {
   correctTransaction,
   createAccount,
@@ -25,6 +48,7 @@ export {
   latestTransaction,
   listAccounts,
   listCategories,
+  listFxPairsInUse,
   listFxRates,
   listImportKeys,
   listIncomeExpectations,
@@ -34,6 +58,7 @@ export {
   matchInflowAndSave,
   materializePlanExpectation,
   type OnboardingStep,
+  pruneImportPreviews,
   type RecordTransactionInput,
   type RecordTransactionResult,
   readImportPreview,
@@ -41,8 +66,11 @@ export {
   recordTransaction,
   recordTransfer,
   removeImportPreview,
+  removeOpenExpectations,
+  replaceFxRate,
   type StatementProfileRecord,
   saveStatementProfile,
+  type UserFlags,
   updateAccount,
   updateImportPreviewAccount,
   updateIncomeExpectation,
@@ -52,8 +80,10 @@ export {
 } from "./repository.js";
 export {
   accounts,
+  appState,
   categories,
   fxRates,
+  handledUpdates,
   importExternalKeys,
   importPreviews,
   incomeExpectations,
@@ -62,3 +92,4 @@ export {
   transactions,
   users,
 } from "./schema.js";
+export { CLEAN_STOP_KEY, claimUpdate, isUpdateHandled, pruneHandledUpdates, readState, writeState } from "./state.js";

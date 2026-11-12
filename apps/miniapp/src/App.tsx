@@ -1,85 +1,135 @@
-import type { User } from "@mon22r/domain";
-import { useEffect, useState } from "react";
-import { AccountsScreen } from "./AccountsScreen";
-import { errorText, getMe } from "./api";
+import type { Account, Category, User } from "@mon22r/domain";
+import { useCallback, useEffect, useMemo, useState } from "react";
+
+import { errorText, getMe, type Me } from "./api";
 import { FeedScreen } from "./FeedScreen";
 import { currentMonth, type MonthPoint } from "./format";
 import { MonthScreen } from "./MonthScreen";
-import { PlansScreen } from "./PlansScreen";
+import { SettingsScreen } from "./SettingsScreen";
 import { SetupScreen } from "./SetupScreen";
-import { insetStyle, LaunchParamsAuth, type TelegramBoot, useTelegramInsets } from "./telegram";
-import { Status } from "./ui";
+import { refreshVisible } from "./store";
+import { Notice, Skeleton } from "./ui";
 
-type Screen = "month" | "plans" | "feed" | "accounts";
+type Screen = "month" | "feed" | "settings";
 
 const TABS: readonly { id: Screen; label: string }[] = [
   { id: "month", label: "Месяц" },
-  { id: "plans", label: "Следующий месяц" },
   { id: "feed", label: "Лента" },
-  { id: "accounts", label: "Счета" },
+  { id: "settings", label: "Настройки" },
 ];
+
+/** What the screens share about the owner: profile, accounts, categories, and the default account. */
+export type Ledger = {
+  readonly user: User;
+  readonly accounts: readonly Account[];
+  readonly categories: readonly Category[];
+  readonly defaultAccountId: string | null;
+  readonly version: string;
+};
+
+export type LedgerChange = (next: (current: Ledger) => Ledger) => void;
 
 type Gate =
   | { readonly status: "loading" }
   | { readonly status: "error"; readonly message: string }
   | { readonly status: "setup"; readonly user: User | null }
-  | { readonly status: "ready"; readonly user: User };
+  | { readonly status: "ready"; readonly ledger: Ledger };
 
-export function App({ telegram }: { telegram: TelegramBoot }) {
-  const insets = useTelegramInsets();
-  const [attempt, setAttempt] = useState(0);
+function gateFrom(me: Me): Gate {
+  if (!me.ready || me.user === null) return { status: "setup", user: me.user };
+  return {
+    status: "ready",
+    ledger: {
+      user: me.user,
+      accounts: me.accounts,
+      categories: me.categories,
+      defaultAccountId: me.defaultAccountId,
+      version: me.version,
+    },
+  };
+}
+
+export function App() {
   const [gate, setGate] = useState<Gate>({ status: "loading" });
 
-  useEffect(() => {
-    let cancelled = false;
+  const load = useCallback((quiet: boolean) => {
+    if (!quiet) setGate({ status: "loading" });
     getMe().then(
-      (me) => {
-        if (cancelled) return;
-        if (me.ready && me.user) setGate({ status: "ready", user: me.user });
-        else setGate({ status: "setup", user: me.user });
-      },
+      (me) => setGate(gateFrom(me)),
       (error: unknown) => {
-        if (!cancelled) setGate({ status: "error", message: errorText(error, "Не удалось открыть учёт.") });
+        // A background refresh that fails leaves the working screen alone.
+        if (!quiet) setGate({ status: "error", message: errorText(error, "Не удалось открыть учёт.") });
       },
     );
-    return () => {
-      cancelled = true;
+  }, []);
+
+  useEffect(() => load(false), [load]);
+
+  // Coming back from the chat: entries and categories may have changed there.
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState !== "visible") return;
+      load(true);
+      refreshVisible();
     };
-  }, [attempt]);
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
+  }, [load]);
 
-  const ready = gate.status === "ready";
+  const change: LedgerChange = useCallback((next) => {
+    setGate((current) => (current.status === "ready" ? { status: "ready", ledger: next(current.ledger) } : current));
+  }, []);
 
+  if (gate.status === "ready") return <ReadyApp ledger={gate.ledger} onChange={change} />;
   return (
-    <div className="app" style={insetStyle(insets)}>
-      {telegram.insideTelegram ? <LaunchParamsAuth /> : null}
-      <div className={ready ? "scroll with-nav" : "scroll"}>
+    <div className="app">
+      <main className="scroll">
         <p className="wordmark">mon22r</p>
-        {gate.status === "loading" ? <Status text="Загрузка." /> : null}
+        {gate.status === "loading" ? <Skeleton lines={5} /> : null}
         {gate.status === "error" ? (
-          <Status
-            text={gate.message}
-            action={{ label: "Повторить", onClick: () => setAttempt((value) => value + 1) }}
-          />
+          <Notice tone="problem" text={gate.message} action={{ label: "Повторить", onClick: () => load(false) }} />
         ) : null}
-        {gate.status === "setup" ? (
-          <SetupScreen user={gate.user} onReady={(user) => setGate({ status: "ready", user })} />
-        ) : null}
-        {gate.status === "ready" ? <ReadyApp user={gate.user} /> : null}
-      </div>
+        {gate.status === "setup" ? <SetupScreen user={gate.user} onReady={() => load(false)} /> : null}
+      </main>
     </div>
   );
 }
 
-function ReadyApp({ user }: { user: User }) {
+function ReadyApp({ ledger, onChange }: { ledger: Ledger; onChange: LedgerChange }) {
   const [screen, setScreen] = useState<Screen>("month");
-  const [month, setMonth] = useState<MonthPoint>(() => currentMonth(user.timeZone));
+  const today = useMemo(() => currentMonth(ledger.user.timeZone), [ledger.user.timeZone]);
+  const [month, setMonth] = useState<MonthPoint>(today);
+  // "all", "none" for uncategorized, or a category id. The month screen sets it when a category is tapped.
+  const [feedFilter, setFeedFilter] = useState("all");
 
   return (
-    <>
-      {screen === "month" ? <MonthScreen point={month} onChange={setMonth} /> : null}
-      {screen === "plans" ? <PlansScreen timeZone={user.timeZone} /> : null}
-      {screen === "feed" ? <FeedScreen timeZone={user.timeZone} point={month} onChange={setMonth} /> : null}
-      {screen === "accounts" ? <AccountsScreen /> : null}
+    <div className="app">
+      <main className="scroll with-nav">
+        {screen === "month" ? (
+          <MonthScreen
+            ledger={ledger}
+            point={month}
+            today={today}
+            onMonth={setMonth}
+            onOpenCategory={(categoryId) => {
+              setFeedFilter(categoryId ?? "none");
+              setScreen("feed");
+            }}
+          />
+        ) : null}
+        {screen === "feed" ? (
+          <FeedScreen
+            ledger={ledger}
+            onLedger={onChange}
+            point={month}
+            today={today}
+            onMonth={setMonth}
+            filter={feedFilter}
+            onFilter={setFeedFilter}
+          />
+        ) : null}
+        {screen === "settings" ? <SettingsScreen ledger={ledger} onLedger={onChange} /> : null}
+      </main>
       <nav className="nav" aria-label="Разделы">
         <div className="nav-row">
           {TABS.map((tab) => (
@@ -87,13 +137,17 @@ function ReadyApp({ user }: { user: User }) {
               key={tab.id}
               type="button"
               aria-current={screen === tab.id ? "page" : undefined}
-              onClick={() => setScreen(tab.id)}
+              onClick={() => {
+                if (tab.id === "feed" && screen !== "feed") setFeedFilter("all");
+                setScreen(tab.id);
+                window.scrollTo(0, 0);
+              }}
             >
               {tab.label}
             </button>
           ))}
         </div>
       </nav>
-    </>
+    </div>
   );
 }

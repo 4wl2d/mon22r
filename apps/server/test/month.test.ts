@@ -50,6 +50,8 @@ describe("month estimate", () => {
     });
     const missing = buildMonthView(db, user, { year: 2026, month: 11 });
     expect(missing.estimateInHomeCurrency).toBeNull();
+    expect(missing.plans).toEqual([]);
+    expect(missing.expectations).toEqual([]);
     expect(missing.totalsByCurrency).toEqual([
       { currency: "GBP", incomeMinor: 0, expenseMinor: 450 },
       { currency: "RSD", incomeMinor: 0, expenseMinor: 35_000 },

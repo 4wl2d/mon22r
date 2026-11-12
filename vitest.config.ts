@@ -14,7 +14,7 @@ export default defineConfig({
   },
   test: {
     environment: "node",
-    include: ["packages/*/test/**/*.test.ts", "apps/server/test/**/*.test.ts"],
+    include: ["packages/*/test/**/*.test.ts", "apps/*/test/**/*.test.ts"],
     server: {
       deps: {
         external: ["better-sqlite3"],

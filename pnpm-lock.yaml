@@ -35,9 +35,6 @@ importers:
       '@tma.js/sdk':
         specifier: ^3.3.0
         version: 3.3.0(typescript@5.9.3)
-      '@tma.js/sdk-react':
-        specifier: ^3.0.23
-        version: 3.0.23(@types/react@19.3.0)(react@19.3.1)(typescript@5.9.3)
       react:
         specifier: ^19.1.0
         version: 19.3.1
@@ -764,15 +761,6 @@ packages:
 
   '@tma.js/init-data-node@2.0.8':
     resolution: {integrity: sha512-OK4uLAXOg/uMnmdS0ngcPVJCh3FJLQfk/BpBpxyk5mYBV7cHSidXzyC7AtygfoNgAoadlbDLh1aQANVRUbgjQg==}
-
-  '@tma.js/sdk-react@3.0.23':
-    resolution: {integrity: sha512-19JYJf15loKjRNALUlmwwscfSI76Vqtj9SciymHFlp6B+8qDnBniz4ozD/uXNhZeGvBHR7FJp21P3vO58mNFiw==}
-    peerDependencies:
-      '@types/react': ^17.0.0 || ^18.0.0 || ^19.0.0
-      react: ^17.0.0 || ^18.0.0 || ^19.0.0
-    peerDependenciesMeta:
-      '@types/react':
-        optional: true
 
   '@tma.js/sdk@3.3.0':
     resolution: {integrity: sha512-Hs9cx2lgUPlHL/RO7uKBF00SrOnFV9BLpJ1/r/fW2b/ITqeo4dh4iTmJ/U6h0cSFk5682ZGUSoPVdGJVENsIuA==}
@@ -1913,15 +1901,6 @@ snapshots:
       better-promises: 1.0.0
       error-kid: 2.1.1
       fp-ts: 2.16.11
-    transitivePeerDependencies:
-      - typescript
-
-  '@tma.js/sdk-react@3.0.23(@types/react@19.3.0)(react@19.3.1)(typescript@5.9.3)':
-    dependencies:
-      '@tma.js/sdk': 3.3.0(typescript@5.9.3)
-      react: 19.3.1
-    optionalDependencies:
-      '@types/react': 19.3.0
     transitivePeerDependencies:
       - typescript
 

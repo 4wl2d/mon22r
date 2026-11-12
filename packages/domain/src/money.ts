@@ -10,7 +10,7 @@ export type Money = {
 
 export type ParsedAmount = {
   readonly minor: number;
-  /** Null when the text has no currency hint. Bare amounts use 2 decimal places. */
+  /** Null when the text has no currency hint. The amount then uses the fallback currency's decimal places. */
   readonly currency: CurrencyCode | null;
 };
 
@@ -18,20 +18,27 @@ const ZERO_DECIMAL = new Set(["CLP", "ISK", "JPY", "KRW", "UGX", "VND", "XAF", "
 const THREE_DECIMAL = new Set(["BHD", "IQD", "JOD", "KWD", "LYD", "OMR", "TND"]);
 
 const NAMED_CURRENCIES: Readonly<Record<string, CurrencyCode>> = {
-  rsd: "RSD",
-  rub: "RUB",
   rur: "RUB",
-  gbp: "GBP",
-  eur: "EUR",
-  usd: "USD",
-  jpy: "JPY",
+  din: "RSD",
+  дин: "RSD",
   р: "RUB",
   руб: "RUB",
+  евро: "EUR",
   "₽": "RUB",
   "£": "GBP",
+  "€": "EUR",
+  $: "USD",
 };
 
-const CURRENCY_TOKEN = "£|₽|руб|[A-Za-z]{3}|р";
+/** Longer words first, so `руб` is not read as `р` followed by letters. */
+export const CURRENCY_TOKEN = "£|₽|€|\\$|евро|руб|дин|[A-Za-z]{3}|р";
+
+const ISO_CURRENCIES: ReadonlySet<string> = new Set(Intl.supportedValuesOf("currency"));
+
+/** True for an ISO 4217 code the runtime knows. `BUS` or `BAR` in a note is not a currency. */
+export function isKnownCurrency(code: string): boolean {
+  return ISO_CURRENCIES.has(code);
+}
 
 export function assertCurrency(value: string): CurrencyCode {
   if (!/^[A-Z]{3}$/.test(value)) {
@@ -55,10 +62,11 @@ export function money(minor: number, currency: CurrencyCode): Money {
 
 /**
  * Parse a magnitude such as `1 200,50`, `4.50`, or `1200`.
- * Currency hints include `rsd`, `rub`, `р`, `gbp`, and `£`.
+ * Currency hints include ISO codes, `р`, `руб`, `дин`, `евро`, `£`, `€`, `₽`, and `$`.
+ * Without a hint the decimal places come from `fallbackCurrency` (2 when it is not given).
  * The result is integer minor units. It does not round extra fractional digits.
  */
-export function parseAmount(input: string): ParsedAmount {
+export function parseAmount(input: string, fallbackCurrency?: CurrencyCode): ParsedAmount {
   if (typeof input !== "string") {
     throw new LedgerError("invalid_amount", "Amount must be a string");
   }
@@ -67,7 +75,8 @@ export function parseAmount(input: string): ParsedAmount {
     throw new LedgerError("invalid_amount", "Amount is empty");
   }
   const peeled = peelCurrency(normalized);
-  const exponent = peeled.currency === null ? 2 : minorExponent(peeled.currency);
+  const hint = peeled.currency ?? fallbackCurrency;
+  const exponent = hint === undefined ? 2 : minorExponent(hint);
   return {
     minor: parseNumericToMinor(peeled.numeric, exponent),
     currency: peeled.currency,
@@ -120,7 +129,8 @@ function peelCurrency(input: string): { numeric: string; currency: CurrencyCode 
 function currencyFromToken(token: string): CurrencyCode {
   const mapped = NAMED_CURRENCIES[token.toLowerCase()];
   if (mapped !== undefined) return mapped;
-  if (/^[A-Za-z]{3}$/.test(token)) return assertCurrency(token.toUpperCase());
+  const code = token.toUpperCase();
+  if (/^[A-Z]{3}$/.test(code) && isKnownCurrency(code)) return code;
   throw new LedgerError("invalid_currency", `Unknown currency "${token}"`);
 }
 

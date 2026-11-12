@@ -7,8 +7,14 @@
     "node": ">=22"
   },
   "scripts": {
+    "build": "pnpm --filter @mon22r/server build && pnpm --filter @mon22r/miniapp build",
+    "check": "biome check .",
+    "format": "biome check --write .",
     "typecheck": "tsc -b --pretty false && tsc -p tsconfig.test.json --pretty false --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "verify": "pnpm check && pnpm typecheck && pnpm test && pnpm build",
+    "preview": "pnpm build && node apps/server/scripts/preview.mjs",
+    "bench": "pnpm --filter @mon22r/server build && node apps/server/scripts/bench.mjs"
   },
   "devDependencies": {
     "@biomejs/biome": "2.6.5",
