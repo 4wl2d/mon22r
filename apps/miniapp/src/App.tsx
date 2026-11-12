@@ -2,20 +2,21 @@ import type { Account, Category, User } from "@mon22r/domain";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { errorText, getMe, type Me } from "./api";
-import { FeedScreen } from "./FeedScreen";
+import { EntriesScreen } from "./EntriesScreen";
 import { currentMonth, type MonthPoint } from "./format";
 import { MonthScreen } from "./MonthScreen";
 import { SettingsScreen } from "./SettingsScreen";
 import { SetupScreen } from "./SetupScreen";
 import { refreshVisible } from "./store";
-import { Notice, Skeleton } from "./ui";
+import { hapticSelect } from "./telegram";
+import { Icon, type IconName, Notice, Skeleton, Toaster } from "./ui";
 
-type Screen = "month" | "feed" | "settings";
+type Screen = "month" | "entries" | "settings";
 
-const TABS: readonly { id: Screen; label: string }[] = [
-  { id: "month", label: "Месяц" },
-  { id: "feed", label: "Лента" },
-  { id: "settings", label: "Настройки" },
+const TABS: readonly { id: Screen; label: string; icon: IconName }[] = [
+  { id: "month", label: "Месяц", icon: "month" },
+  { id: "entries", label: "Записи", icon: "entries" },
+  { id: "settings", label: "Настройки", icon: "settings" },
 ];
 
 /** What the screens share about the owner: profile, accounts, categories, and the default account. */
@@ -83,11 +84,15 @@ export function App() {
   if (gate.status === "ready") return <ReadyApp ledger={gate.ledger} onChange={change} />;
   return (
     <div className="app">
-      <main className="scroll">
-        <p className="wordmark">mon22r</p>
-        {gate.status === "loading" ? <Skeleton lines={5} /> : null}
+      <main className="page">
+        {gate.status === "loading" ? <Skeleton blocks={[44, 168, 220]} /> : null}
         {gate.status === "error" ? (
-          <Notice tone="problem" text={gate.message} action={{ label: "Повторить", onClick: () => load(false) }} />
+          <Notice
+            tone="problem"
+            title="mon22r не открылся"
+            text={gate.message}
+            action={{ label: "Повторить", onClick: () => load(false) }}
+          />
         ) : null}
         {gate.status === "setup" ? <SetupScreen user={gate.user} onReady={() => load(false)} /> : null}
       </main>
@@ -100,11 +105,22 @@ function ReadyApp({ ledger, onChange }: { ledger: Ledger; onChange: LedgerChange
   const today = useMemo(() => currentMonth(ledger.user.timeZone), [ledger.user.timeZone]);
   const [month, setMonth] = useState<MonthPoint>(today);
   // "all", "none" for uncategorized, or a category id. The month screen sets it when a category is tapped.
-  const [feedFilter, setFeedFilter] = useState("all");
+  const [filter, setFilter] = useState("all");
+
+  function open(next: Screen) {
+    if (next === screen) {
+      window.scrollTo({ top: 0, behavior: "smooth" });
+      return;
+    }
+    hapticSelect();
+    if (next === "entries") setFilter("all");
+    setScreen(next);
+    window.scrollTo(0, 0);
+  }
 
   return (
     <div className="app">
-      <main className="scroll with-nav">
+      <main className="page with-nav">
         {screen === "month" ? (
           <MonthScreen
             ledger={ledger}
@@ -112,24 +128,26 @@ function ReadyApp({ ledger, onChange }: { ledger: Ledger; onChange: LedgerChange
             today={today}
             onMonth={setMonth}
             onOpenCategory={(categoryId) => {
-              setFeedFilter(categoryId ?? "none");
-              setScreen("feed");
+              setFilter(categoryId ?? "none");
+              setScreen("entries");
+              window.scrollTo(0, 0);
             }}
           />
         ) : null}
-        {screen === "feed" ? (
-          <FeedScreen
+        {screen === "entries" ? (
+          <EntriesScreen
             ledger={ledger}
             onLedger={onChange}
             point={month}
             today={today}
             onMonth={setMonth}
-            filter={feedFilter}
-            onFilter={setFeedFilter}
+            filter={filter}
+            onFilter={setFilter}
           />
         ) : null}
         {screen === "settings" ? <SettingsScreen ledger={ledger} onLedger={onChange} /> : null}
       </main>
+      <Toaster />
       <nav className="nav" aria-label="Разделы">
         <div className="nav-row">
           {TABS.map((tab) => (
@@ -137,12 +155,9 @@ function ReadyApp({ ledger, onChange }: { ledger: Ledger; onChange: LedgerChange
               key={tab.id}
               type="button"
               aria-current={screen === tab.id ? "page" : undefined}
-              onClick={() => {
-                if (tab.id === "feed" && screen !== "feed") setFeedFilter("all");
-                setScreen(tab.id);
-                window.scrollTo(0, 0);
-              }}
+              onClick={() => open(tab.id)}
             >
+              <Icon name={tab.icon} />
               {tab.label}
             </button>
           ))}

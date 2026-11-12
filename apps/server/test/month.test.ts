@@ -50,6 +50,8 @@ describe("month estimate", () => {
     });
     const missing = buildMonthView(db, user, { year: 2026, month: 11 });
     expect(missing.estimateInHomeCurrency).toBeNull();
+    expect(missing.expenseInHomeCurrency).toBeNull();
+    expect(missing.incomeInHomeCurrency).toBeNull();
     expect(missing.plans).toEqual([]);
     expect(missing.expectations).toEqual([]);
     expect(missing.totalsByCurrency).toEqual([
@@ -74,6 +76,9 @@ describe("month estimate", () => {
       asOf: "2026-11-12",
     });
     expect(estimated.estimateInHomeCurrency?.minor).toBe(-450 * 150 - 35_000);
+    // Spending and income are estimated apart, so the screen can lead with what was spent.
+    expect(estimated.expenseInHomeCurrency).toMatchObject({ minor: 450 * 150 + 35_000, currency: "RSD" });
+    expect(estimated.incomeInHomeCurrency).toMatchObject({ minor: 0, currency: "RSD", usedConversion: true });
     expect(getTransaction(db, user.id, "pounds")?.amountMinor).toBe(450);
     expect(getTransaction(db, user.id, "dinars")?.amountMinor).toBe(35_000);
   });

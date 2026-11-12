@@ -2,102 +2,97 @@ import type { User } from "@mon22r/domain";
 import { type FormEvent, useState } from "react";
 
 import { errorText, setup } from "./api";
-import { isTimeZone } from "./format";
+import { deviceTimeZone, formatUtcOffset } from "./format";
+import { CurrencyChoice, TimeZoneSheet } from "./pickers";
 import { hapticError, hapticSuccess } from "./telegram";
+import { FieldError, Icon } from "./ui";
 
-const CURRENCIES = ["EUR", "RSD", "RUB", "GBP"] as const;
 const DEFAULT_ZONE = "Europe/Belgrade";
 
+/**
+ * First run: the two things the ledger cannot guess for itself, then the door to the app.
+ * The time zone starts from the device's, so most owners only choose a currency.
+ */
 export function SetupScreen({ user, onReady }: { user: User | null; onReady: () => void }) {
   const [currency, setCurrency] = useState(user?.homeCurrency ?? "");
-  const [timeZone, setTimeZone] = useState(user?.timeZone ?? DEFAULT_ZONE);
+  const [timeZone, setTimeZone] = useState(user?.timeZone ?? deviceTimeZone() ?? DEFAULT_ZONE);
   const [starterAccounts, setStarterAccounts] = useState(false);
+  const [pickingZone, setPickingZone] = useState(false);
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
 
   async function submit(event: FormEvent) {
     event.preventDefault();
-    const homeCurrency = currency.trim().toUpperCase();
-    const zone = timeZone.trim();
-    if (!/^[A-Z]{3}$/.test(homeCurrency)) {
-      setError("Укажите валюту из трёх букв.");
-      return;
-    }
-    if (!isTimeZone(zone)) {
-      setError("Часовой пояс не распознан.");
+    if (currency === "") {
+      setError("Выберите домашнюю валюту.");
       return;
     }
     setSaving(true);
     setError("");
     try {
-      await setup({ homeCurrency, timeZone: zone, starterAccounts });
+      await setup({ homeCurrency: currency, timeZone, starterAccounts });
       hapticSuccess();
       onReady();
     } catch (caught) {
       hapticError();
       setError(errorText(caught, "Не удалось сохранить настройку."));
-    } finally {
       setSaving(false);
     }
   }
 
   return (
     <section>
-      <h1>Настройка</h1>
+      <p className="wordmark">mon22r</p>
+      <p className="lead">Учёт расходов и доходов. Два вопроса, и можно начинать.</p>
       <form className="stack" onSubmit={(event) => void submit(event)}>
-        <div>
-          <label>
-            Домашняя валюта
-            <input
-              value={currency}
-              onChange={(event) => setCurrency(event.target.value.toUpperCase())}
-              maxLength={3}
-              autoCapitalize="characters"
-              autoComplete="off"
-              spellCheck={false}
-            />
-          </label>
-          <div className="chips wrap plain">
-            {CURRENCIES.map((code) => (
-              <button
-                key={code}
-                type="button"
-                className="chip"
-                aria-pressed={currency === code}
-                onClick={() => setCurrency(code)}
-              >
-                {code}
-              </button>
-            ))}
+        <CurrencyChoice
+          label="Домашняя валюта — в ней считается итог месяца"
+          value={currency}
+          disabled={saving}
+          onChange={(next) => {
+            setCurrency(next);
+            setError("");
+          }}
+        />
+        <div className="field">
+          <span className="field-label">Часовой пояс — по нему делятся дни и месяцы</span>
+          <div className="card">
+            <button type="button" className="row" disabled={saving} onClick={() => setPickingZone(true)}>
+              <span className="row-title">{timeZone.replaceAll("_", " ")}</span>
+              <span className="row-value">
+                {formatUtcOffset(timeZone)}
+                <Icon name="forward" small />
+              </span>
+            </button>
           </div>
         </div>
-        <label>
-          Часовой пояс
-          <input
-            value={timeZone}
-            onChange={(event) => setTimeZone(event.target.value)}
-            spellCheck={false}
-            autoCapitalize="off"
-            autoComplete="off"
-          />
-        </label>
-        <label className="check">
+        <label className="card check">
           <input
             type="checkbox"
             checked={starterAccounts}
+            disabled={saving}
             onChange={(event) => setStarterAccounts(event.target.checked)}
           />
-          <span>Создать счета Поштанска · RSD, Рубли · RUB и UK · GBP</span>
+          <span>
+            Создать стартовые счета
+            <small>Поштанска · RSD, Рубли · RUB и UK · GBP. Названия можно изменить позже.</small>
+          </span>
         </label>
+        <FieldError text={error} />
         <button type="submit" className="button" disabled={saving} aria-busy={saving}>
-          {saving ? "Сохраняю…" : "Продолжить"}
+          {saving ? "Сохраняю…" : "Начать"}
         </button>
-        {error ? (
-          <p className="field-error" role="alert">
-            {error}
-          </p>
-        ) : null}
       </form>
+      {pickingZone ? (
+        <TimeZoneSheet
+          value={timeZone}
+          onClose={() => setPickingZone(false)}
+          onPick={(next) => {
+            setTimeZone(next);
+            setPickingZone(false);
+          }}
+        />
+      ) : null}
     </section>
   );
 }

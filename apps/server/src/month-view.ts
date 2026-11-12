@@ -9,6 +9,7 @@ import {
   type IncomeExpectation,
   type IncomePlan,
   LedgerError,
+  type Money,
   monthRange,
   spendByCategory,
   totalsByCurrency,
@@ -28,6 +29,9 @@ export type MonthView = {
   readonly plans: readonly IncomePlan[];
   /** Net of the month in the home currency. Null when a needed rate is missing. */
   readonly estimateInHomeCurrency: HomeCurrencyEstimate | null;
+  /** Spending and income of the month in the home currency, under the same rule as the net. */
+  readonly expenseInHomeCurrency: HomeCurrencyEstimate | null;
+  readonly incomeInHomeCurrency: HomeCurrencyEstimate | null;
 };
 
 /** Everything the month screen and the chat summary show, in one read. */
@@ -39,6 +43,13 @@ export function buildMonthView(db: Mon22rDb, user: User, month: CalendarMonth): 
     toExclusive: range.endExclusive.toISOString(),
   });
   const totals = totalsByCurrency(transactions);
+  const rates = listFxRates(db);
+  const estimate = (pick: (row: CurrencyTotals) => number) =>
+    estimateParts(
+      totals.map((row) => ({ minor: pick(row), currency: row.currency })),
+      user.homeCurrency,
+      rates,
+    );
   return {
     month,
     homeCurrency: user.homeCurrency,
@@ -47,21 +58,19 @@ export function buildMonthView(db: Mon22rDb, user: User, month: CalendarMonth): 
     categorySpend: spendByCategory(transactions),
     expectations: listIncomeExpectations(db, user.id, month),
     plans: listIncomePlans(db, user.id).filter((plan) => expectationFromPlan(plan, month, "draft") !== null),
-    estimateInHomeCurrency: estimateTotals(totals, user.homeCurrency, listFxRates(db)),
+    estimateInHomeCurrency: estimate((row) => row.incomeMinor - row.expenseMinor),
+    expenseInHomeCurrency: estimate((row) => row.expenseMinor),
+    incomeInHomeCurrency: estimate((row) => row.incomeMinor),
   };
 }
 
-function estimateTotals(
-  totals: readonly CurrencyTotals[],
+function estimateParts(
+  parts: readonly Money[],
   homeCurrency: string,
   rates: ReturnType<typeof listFxRates>,
 ): HomeCurrencyEstimate | null {
   try {
-    return estimateInHomeCurrency({
-      parts: totals.map((row) => ({ minor: row.incomeMinor - row.expenseMinor, currency: row.currency })),
-      homeCurrency,
-      rates,
-    });
+    return estimateInHomeCurrency({ parts, homeCurrency, rates });
   } catch (error) {
     if (error instanceof LedgerError && (error.code === "fx_rate_missing" || error.code === "invalid_fx_rate"))
       return null;

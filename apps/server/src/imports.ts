@@ -160,15 +160,21 @@ export function commitStoredPreview(
   db: Mon22rDb,
   user: User,
   previewId: string,
-): { readonly created: number; readonly duplicate: number; readonly transactions: readonly Transaction[] } {
+): {
+  readonly created: number;
+  readonly duplicate: number;
+  readonly transactions: readonly Transaction[];
+  readonly accountId: string;
+} {
   const preview = readImportPreview(db, user.id, previewId);
   if (preview === null) throw new LedgerError("not_found", "Import preview was not found for this user");
-  if (preview.accountId === null) throw new LedgerError("invalid_posting", "Account is required");
+  const accountId = preview.accountId;
+  if (accountId === null) throw new LedgerError("invalid_posting", "Account is required");
   const lines = decodePreview(preview.linesJson).lines;
   const apply = db.sqlite.transaction(() => {
     const result = commitStatementLines({
       userId: user.id,
-      accountId: preview.accountId ?? "",
+      accountId,
       source: preview.source,
       timeZone: user.timeZone,
       lines,
@@ -177,9 +183,16 @@ export function commitStoredPreview(
         recordTransaction(db, user.id, { ...row, categoryId: rememberedCategoryId(db, user.id, row.description) }),
     });
     removeImportPreview(db, user.id, preview.id);
-    return result;
+    return { ...result, accountId };
   });
   return apply();
+}
+
+/** Drops a preview the owner decided not to write. Returns false when it was already gone. */
+export function discardStoredPreview(db: Mon22rDb, user: User, previewId: string): boolean {
+  if (readImportPreview(db, user.id, previewId) === null) return false;
+  removeImportPreview(db, user.id, previewId);
+  return true;
 }
 
 export function assignPreviewAccount(db: Mon22rDb, user: User, previewId: string, accountId: string): UploadResult {

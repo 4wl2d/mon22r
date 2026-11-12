@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { buttons, text } from "../src/copy.js";
+import { buttons, closePlanLabel, text, toast } from "../src/copy.js";
 import {
   awaitingStep,
   decideOnboarding,
@@ -43,7 +43,7 @@ describe("onboarding decisions", () => {
 
   it("keeps bot copy free of exclamation marks", () => {
     const samples: string[] = [...Object.values(buttons)];
-    for (const value of Object.values(text)) {
+    for (const value of [...Object.values(text), ...Object.values(toast)]) {
       if (typeof value === "string") samples.push(value);
     }
     samples.push(
@@ -51,10 +51,13 @@ describe("onboarding decisions", () => {
       text.noDestination("наличные"),
       text.currencyMismatch("Наличные", "RUB", "RSD"),
       text.importCounts({ new: 1, duplicate: 2, skipped: 3 }),
-      text.importDone(1),
+      text.importPreview({ new: 1, duplicate: 2, skipped: 3 }, "Наличные"),
+      text.importDone(1, "Наличные"),
       text.mappingNeeded(["Date", "Amount"]),
-      text.planSaved("180000", "RSD", "зп", 5, "декабрь 2026"),
-      text.closePlan("зп"),
+      text.planSaved("180000", "RSD", "зп", "каждый месяц 5-го числа · с декабря 2026"),
+      text.undone("−350 RSD · кофе"),
+      toast.movedTo("Наличные"),
+      closePlanLabel("зп"),
     );
     expect(samples.join("\n")).not.toContain("!");
   });

@@ -8,10 +8,11 @@ A TypeScript pnpm workspace: a Telegram bot and a React Mini App sharing one led
 | --- | --- |
 | `apps/server/src/main.ts`, `service.ts` | Process entry and lifecycle: start, signals, fatal exits; database, HTTP, bot, and jobs wired together. |
 | `apps/server/src/bot.ts`, `capture.ts`, `phrases.ts`, `entry-view.ts` | Chat handlers, applying a line to the ledger, the phrase grammar, and the confirmation with its buttons. |
+| `apps/server/src/copy.ts`, `format.ts`, `month-summary.ts` | Everything the bot says: message texts, amounts and entry lines, and the `/month` summary. |
 | `apps/server/src/http.ts`, `auth.ts`, `month-view.ts` | Mini App API, launch-data check, and the month summary both the API and `/month` use. |
 | `apps/server/src/jobs.ts`, `backup.ts`, `fx.ts`, `notify.ts`, `health.ts` | Scheduled work, backup and restore, reference rates, owner alerts, liveness. |
 | `apps/server/src/tools.ts`, `healthcheck.ts` | Operations commands and the container health probe. |
-| `apps/miniapp/src` | Screens (month, feed, settings, setup), the API client with response validation, a small read cache, Telegram integration. |
+| `apps/miniapp/src` | Screens (month, entries, settings, setup), shared components and the stylesheet, the API client with response validation, a small read cache, Telegram integration. |
 | `packages/domain/src` | Money parsing, transaction rules, calendar months in a time zone, totals, income expectations, FX estimates. |
 | `packages/db/src` | SQLite connection, schema, migrations, repository functions scoped to a user, backup primitives. |
 | `packages/importers/src` | CSV parsing, column mapping, preview classification, statement-line commit. |
@@ -67,6 +68,8 @@ The grammar is deterministic and Russian. One line becomes an expense, income (`
 - **Exactly once.** The ledger write and a record of the Telegram update ID share one SQLite transaction. An update delivered again after a restart is answered with "already recorded" and writes nothing.
 - **Undo.** `/undo` and the button remove the entry (both legs of a transfer) and say what was removed. `/undo` skips imported lines.
 
+**Chat messages.** Every message is sent with Telegram's HTML parse mode: bold for the amount or the title, `<code>` for anything meant to be copied. `copy.ts` and `format.ts` are the only places that build message text, and they escape every name and note that comes from the ledger. Button labels and callback answers are plain text. A confirmation's buttons are ordered by need: categories while the entry has none, the other accounts of its currency, an expected income it could count toward, and undo last. A pressed setup button turns its question into the answer.
+
 Income plans are monthly templates. Each month they apply to gets its own line with a status: expected, received, partial, skipped. An income entry of a similar amount offers to close the matching line; nothing is closed without a tap. A line remembers only the last entry that was matched to it, so when a line was filled by several partial entries, removing an earlier one does not reopen it; set its status by hand in that case.
 
 ## CSV import
@@ -91,7 +94,9 @@ Backups use SQLite's online backup API, are converted to a single file, checked 
 
 React 19 with Vite. The Telegram SDK supplies launch data, viewport insets as CSS variables, haptics, and external links; nothing is loaded from other origins. The API client validates every answer before use, gives each call a time limit, and retries a failed read once but never a write.
 
-Reads go through a small in-memory cache keyed by month: a screen shows cached data at once and refreshes in the background, and returning from the chat refreshes what is on screen. Opening the app costs two requests; the feed costs one.
+Reads go through a small in-memory cache keyed by month: a screen shows cached data at once and refreshes in the background, and returning from the chat refreshes what is on screen. Opening the app costs two requests; the entries screen costs one.
+
+**Interface.** One stylesheet defines the system: a light and a dark palette as CSS variables, chosen from the Telegram client's theme (the system's outside Telegram) and mirrored onto the client chrome; one accent that marks what can be acted on; surfaces with rows; controls at least 44px tall. Anything that can be changed opens in a sheet, which is a native modal `<dialog>`: focus stays inside, and Escape, the scrim, the close control, and Telegram's back button close it. The sheet sits above the on-screen keyboard through the visual viewport. An action that finishes closes its sheet and is confirmed by a toast. The month headline needs spending and income in the home currency, so the month view carries those two estimates next to the net.
 
 ## Delivery
 

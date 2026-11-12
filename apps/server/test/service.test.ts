@@ -57,13 +57,14 @@ describe("service lifecycle", () => {
     expect(telegram.sent("setMyCommands")[0]?.commands).toEqual([
       { command: "month", description: "Итоги месяца" },
       { command: "undo", description: "Отменить последнюю запись" },
-      { command: "help", description: "Как писать" },
+      { command: "help", description: "Как записывать" },
     ]);
     expect(telegram.sent("setChatMenuButton")).toHaveLength(1);
 
     telegram.push(textUpdate(501, OWNER, "кофе 350"));
     const reply = await telegram.waitFor((call) => call.method === "sendMessage");
-    expect(reply.body.text).toBe("350 RSD · кофе · Поштанска");
+    expect(reply.body.text).toBe("<b>−350\u00A0RSD</b> · кофе\nПоштанска · без категории");
+    expect(reply.body.parse_mode).toBe("HTML");
 
     const health = await fetch(`http://127.0.0.1:${service.port}/healthz`);
     expect(health.status).toBe(200);

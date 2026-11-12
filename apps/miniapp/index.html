@@ -3,16 +3,24 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-    <meta name="theme-color" content="#161814" />
-    <meta name="color-scheme" content="dark" />
+    <meta name="theme-color" content="#f3f1ea" />
+    <meta name="color-scheme" content="light dark" />
     <meta name="robots" content="noindex" />
     <title>mon22r</title>
     <style>
+      /* The page colour before the stylesheet arrives. The app then follows the Telegram client's scheme. */
       html,
       body {
         margin: 0;
-        background: #161814;
-        color: #e7e2d6;
+        background: #f3f1ea;
+        color: #1c1d19;
+      }
+      @media (prefers-color-scheme: dark) {
+        html,
+        body {
+          background: #141512;
+          color: #ebe7dc;
+        }
       }
     </style>
   </head>
