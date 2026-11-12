@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/assets/hero.svg" alt="mon22r. A little ledger. A clearer month. A self-hosted Telegram ledger with an illustrative, synthetic month view." width="1280" />
+  <img src="docs/assets/hero.svg" alt="mon22r. Self-hosted Telegram ledger." width="1280" />
 </p>
 
 <p align="center">
