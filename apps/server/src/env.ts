@@ -36,7 +36,7 @@ export function readEnv(source: NodeJS.ProcessEnv): Env {
     version: source.APP_VERSION?.trim() || "dev",
     backupDir,
     backupKeep: readInteger(source.BACKUP_KEEP, "BACKUP_KEEP", 14, 1, 365),
-    backupToTelegram: readSwitch(source.BACKUP_TO_TELEGRAM, "BACKUP_TO_TELEGRAM", true),
+    backupToTelegram: readSwitch(source.BACKUP_TO_TELEGRAM, "BACKUP_TO_TELEGRAM", false),
     fxRefresh: readSwitch(source.FX_REFRESH, "FX_REFRESH", true),
     telegramApiRoot: telegramApiRoot === undefined ? undefined : readUrl(telegramApiRoot, "TELEGRAM_API_ROOT"),
   };

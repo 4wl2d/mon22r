@@ -36,19 +36,32 @@ revision="$(dock image inspect "$IMAGE" --format '{{ index .Config.Labels "org.o
 [[ "$revision" == "$SHA" ]] || die "loaded image is labeled $revision, expected $SHA"
 log "image $IMAGE loaded and verified"
 
-# 2. Install the scripts and the release's stack definition. Nothing is running differently yet.
+# 2. Store the release's stack definition. Nothing is running differently yet.
 mkdir -p "$ROOT/releases/$SHA" "$ROOT/backups"
 # After the first release the backups belong to the application's user; that is fine.
 chmod 700 "$ROOT/backups" 2>/dev/null || true
-install_scripts "$SOURCE_DIR"
 cp "$INCOMING/compose.yml" "$INCOMING/Caddyfile" "$ROOT/releases/$SHA/"
 printf '%s\n' "$IMAGE" >"$ROOT/releases/$SHA/image"
 
-# The stack as it ran before releases existed: built on the host and started from its source directory.
-# It counts only for the project it actually is, and only while no release has ever been recorded.
-legacy_available() {
-  [[ -z "$PREVIOUS" && -f "$LEGACY_DIR/docker-compose.yml" && "$PROJECT" == "$(basename "$LEGACY_DIR")" ]]
+# Preserve the actual running legacy image before the first cutover. Its original source directory
+# and Caddy bind mount stay untouched, so both automatic and manual rollback can return to them.
+preserve_legacy() {
+  [[ -z "$PREVIOUS" && -f "$LEGACY_DIR/docker-compose.yml" && "$PROJECT" == "$(basename "$LEGACY_DIR")" ]] || return 0
+  local running id tag
+  running="$(running_app_image)"
+  [[ -n "$running" ]] || return 0
+  id="$(dock image inspect "$running" --format '{{.Id}}')" || return 1
+  tag="$PROJECT:legacy"
+  dock tag "$id" "$tag" || return 1
+  mkdir -p "$ROOT/releases/legacy" || return 1
+  cp "$LEGACY_DIR/docker-compose.yml" "$ROOT/releases/legacy/compose.yml" || return 1
+  cp "$LEGACY_DIR/Caddyfile" "$ROOT/releases/legacy/Caddyfile" || return 1
+  printf '%s\n' "$tag" >"$ROOT/releases/legacy/image" || return 1
+  printf 'services:\n  app:\n    image: %s\n    pull_policy: never\n' "$tag" >"$ROOT/releases/legacy/image-override.yml" || return 1
+  PREVIOUS=legacy
+  log "preserved legacy image $id for automatic and manual rollback"
 }
+preserve_legacy || die "could not preserve the legacy release; nothing was stopped"
 
 start_previous() {
   # A UID change must not take write access away from a process that is still shutting down.
@@ -56,19 +69,9 @@ start_previous() {
   if [[ -n "$PREVIOUS" ]]; then
     own_data "$(release_image "$PREVIOUS")" || return 1
     activate "$PREVIOUS" || return 1
-    compose up -d --remove-orphans || return 1
+    compose up -d --no-build --remove-orphans || return 1
     reload_proxy || true
     wait_healthy "$PREVIOUS"
-  elif legacy_available; then
-    rm -f "$ROOT/current"
-    local legacy_image
-    legacy_image="$(cd "$LEGACY_DIR" && "${SUDO[@]}" docker compose config --images | grep -v caddy | head -n 1)" || return 1
-    [[ -n "$legacy_image" ]] || return 1
-    own_data "$legacy_image" || return 1
-    (cd "$LEGACY_DIR" && "${SUDO[@]}" docker compose up -d --no-build --remove-orphans) || return 1
-    sleep 10
-    # Running, and running the old image: a container of the failed release must not pass for a rollback.
-    [[ "$(running_app_image)" == "$legacy_image" ]]
   else
     return 1
   fi
@@ -78,7 +81,7 @@ roll_back() {
   local reason="$1"
   log "ROLLING BACK: $reason"
   recent_logs 30 || true
-  if [[ -z "$PREVIOUS" ]] && ! legacy_available; then
+  if [[ -z "$PREVIOUS" ]]; then
     notify "mon22r: выпуск ${SHA:0:7} не прошёл проверку ($reason), а прежней версии нет. Нужна ручная проверка сервера."
     die "release $SHA is not healthy and there is no previous release to return to; it was left as it is"
   fi
@@ -123,13 +126,21 @@ snapshot_database() {
 FAILURE="the stack did not start"
 switch_and_verify() {
   FAILURE="the application could not be stopped"
+  if [[ "$PREVIOUS" == "legacy" ]]; then
+    # Legacy has no durable update IDs. Let the next poll confirm its handled batch.
+    # Keep chat and Mini App writes idle during first cutover; never discard pending updates.
+    local drain="${MON22R_LEGACY_DRAIN_SECONDS:-40}"
+    [[ "$drain" =~ ^[0-9]+$ ]] || return 1
+    log "draining legacy polling for ${drain}s before the first cutover"
+    sleep "$drain"
+  fi
   stop_app || return 1
   FAILURE="the pre-deploy backup failed"
   snapshot_database || return 1
   FAILURE="the stack did not start"
   own_data "$IMAGE" || return 1
   activate "$SHA" || return 1
-  compose up -d --remove-orphans || return 1
+  compose up -d --no-build --remove-orphans || return 1
   reload_proxy || true
   FAILURE="the application did not become healthy"
   wait_healthy "$SHA" || return 1
@@ -140,6 +151,7 @@ if ! switch_and_verify; then roll_back "$FAILURE"; fi
 
 # The release is live. Bookkeeping from here on must not turn a good release into a failed run.
 finish() {
+  install_scripts "$SOURCE_DIR" || return 1
   if [[ -n "$PREVIOUS" && "$PREVIOUS" != "$SHA" ]]; then printf '%s\n' "$PREVIOUS" >"$ROOT/previous"; fi
   printf '%s %s previous=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$SHA" "${PREVIOUS:-none}" >>"$ROOT/releases.log"
   # 6. Keep the current and the previous release; drop older images and their directories.

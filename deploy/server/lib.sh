@@ -58,8 +58,13 @@ compose() {
   local name image
   name="$(release_name current)" || die "no current release in $ROOT"
   image="$(release_image "$name")"
-  "${SUDO[@]}" env "MON22R_IMAGE=$image" docker compose \
-    --project-name "$PROJECT" --project-directory "$ROOT" -f "$ROOT/compose.yml" "$@"
+  if [[ "$name" == "legacy" ]]; then
+    "${SUDO[@]}" docker compose --project-name "$PROJECT" --project-directory "$LEGACY_DIR" \
+      -f "$ROOT/releases/legacy/compose.yml" -f "$ROOT/releases/legacy/image-override.yml" "$@"
+  else
+    "${SUDO[@]}" env "MON22R_IMAGE=$image" docker compose \
+      --project-name "$PROJECT" --project-directory "$ROOT" -f "$ROOT/compose.yml" "$@"
+  fi
 }
 
 # Copies a release's stack definition into place. The Caddyfile is overwritten in place, not replaced:
@@ -136,14 +141,25 @@ health_json() {
 # /healthz emits compact JSON. Legacy releases are checked separately by start_previous.
 healthy_response() {
   local body="$1" expected="$2"
+  # Only the explicitly preserved legacy image predates /healthz. Its immutable image ID is checked below.
+  if [[ "$expected" == "legacy" ]]; then [[ "$body" == '<!doctype html>'* ]]; return; fi
   [[ "$body" == \{* && "$body" == *'"ok":true'* &&
     "$body" == *"\"version\":\"$expected\""* && "$body" == *'"polling":"ok"'* ]]
 }
 
 wait_healthy() {
-  local expected="$1" deadline=$((SECONDS + HEALTH_TIMEOUT)) body=""
+  local expected="$1" deadline=$((SECONDS + HEALTH_TIMEOUT)) body="" expected_id="" container actual_id
+  if [[ "$expected" == "legacy" ]]; then
+    expected_id="$(dock image inspect "$(release_image legacy)" --format '{{.Id}}')" || return 1
+    sleep 5
+  fi
   while ((SECONDS < deadline)); do
     if body="$(health_json 2>/dev/null)" && healthy_response "$body" "$expected"; then
+      if [[ "$expected" == "legacy" ]]; then
+        container="$(app_container)"
+        actual_id="$(dock inspect "$container" --format '{{.Image}}')" || return 1
+        [[ "$actual_id" == "$expected_id" ]] || return 1
+      fi
       return 0
     fi
     sleep 2
@@ -180,6 +196,7 @@ reload_proxy() {
 
 # Recent application log lines with anything shaped like a bot token masked.
 recent_logs() {
+  [[ -f "$ROOT/current" ]] || return 0
   compose logs --no-color --tail "${1:-60}" app 2>&1 | sed -E 's/[0-9]{6,12}:[A-Za-z0-9_-]{30,}/[redacted]/g'
 }
 

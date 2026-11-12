@@ -25,6 +25,8 @@ A push to `main` runs the pipeline. Nothing is released unless every step before
 
 If the new version is not healthy within two minutes, the previous release is started again, the run fails, and the owner gets a Telegram message saying which version is running.
 
+On the first cutover from a legacy source-built stack, the running image is preserved as `legacy`, including its original Compose definition. Keep chat and Mini App writes idle during that first deployment: it waits 40 seconds for the old poller to confirm its handled batch before stopping it. Pending Telegram updates are never discarded. Later releases have durable update IDs and graceful shutdown. The legacy source directory must remain available until `legacy` is no longer the previous release.
+
 The version in use is always visible: `status.sh`, `https://<domain>/healthz`, and the bottom of the Mini App's settings. Both the internal and proxy checks require that exact version and a working poll loop; a 200 response containing the old Mini App page does not pass.
 
 To retry the current `main` release, run **CI** manually with branch `main`. The same validation and image tests run first. A manual run on another branch never gets production credentials or deploys.
@@ -39,7 +41,7 @@ To retry the current `main` release, run **CI** manually with branch `main`. The
 /opt/mon22r/bin/rollback.sh
 ```
 
-Both start the previous release again and wait for it to report healthy. The current and the previous image stay on the server, so a rollback needs no build and no network. Running it twice returns to where you were.
+Both start the previous release again and wait for it to report healthy. If the target cannot start, the saved current release is resumed and the operation fails. The current and the previous image stay on the server, including the first preserved `legacy` image, so a rollback needs no build. Running a successful rollback twice returns to where you were.
 
 ### Rollback and the database
 
@@ -51,7 +53,7 @@ A rollback switches the program, not the data. Whether that is safe is decided b
 When a release with such a migration fails its health check, the automatic rollback notices that the previous release does not start, restores the backup taken before the release, and starts the previous release on it. The replaced database files are kept (see below). Doing the same by hand:
 
 ```sh
-/opt/mon22r/bin/rollback.sh                      # says the schema is too new
+/opt/mon22r/bin/rollback.sh                      # resumes current if the target needs an older schema
 /opt/mon22r/bin/restore.sh mon22r-pre-deploy-<time>.sqlite.gz
 ```
 
@@ -68,7 +70,7 @@ Entries made between the release and the restore are not in the restored databas
 
 Every backup is made with SQLite's online backup, so it is consistent while the application is writing, and is checked with `PRAGMA integrity_check` before it gets its name. A file named `mon22r-…sqlite.gz` is a complete single-file database, gzip-compressed.
 
-Backups on the server protect against a bad release or a mistake. The weekly copy in Telegram protects against losing the server. If you prefer no copy in Telegram, set `BACKUP_TO_TELEGRAM=off` and copy `/opt/mon22r/backups` elsewhere on a schedule of your own.
+Backups on the server protect against a bad release or a mistake. Full-ledger uploads to Telegram are disabled by default. To keep an off-server copy, explicitly enable `BACKUP_TO_TELEGRAM=on` for the weekly copy to your chat, or copy `/opt/mon22r/backups` to a private destination of your choice.
 
 A failed backup is logged, reported to the owner in Telegram, and retried after 30 minutes. `/healthz` shows `lastBackupAt`.
 
@@ -81,7 +83,7 @@ ls /opt/mon22r/backups
 /opt/mon22r/bin/restore.sh mon22r-daily-<time>.sqlite.gz     # or: restore.sh latest
 ```
 
-The script verifies the backup first and changes nothing if it is damaged. Then it stops the application, moves the current database files aside inside the data volume as `mon22r.sqlite.before-restore-<time>`, puts the backup in place, starts the application, and waits for it to report healthy. Migrations newer than the backup are applied on start.
+The script verifies the backup first and changes nothing if it is damaged. Then it stops the application, moves the current database files aside inside the data volume as `mon22r.sqlite.before-restore-<time>`, puts the backup in place, starts the application, and waits for it to report healthy. Migrations newer than the backup are applied on start. If a restore is interrupted while the main file is absent, startup refuses to create an empty ledger and names the recovery file to restore.
 
 To restore on a **new** server: complete [setup](SETUP.md) up to a first release, then
 

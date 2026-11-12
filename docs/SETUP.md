@@ -27,7 +27,7 @@ All settings are environment variables, kept in one `.env` file on the server (m
 | `PORT` | no | HTTP port, default `3000`. |
 | `BACKUP_DIR` | no | Where backups go. Default `backups` next to the database; the stack sets `/backups`. |
 | `BACKUP_KEEP` | no | Daily backups kept on disk, default `14`. |
-| `BACKUP_TO_TELEGRAM` | no | `on` (default) sends a backup file to the owner's chat weekly when the ledger changed. `off` keeps backups on the server only. |
+| `BACKUP_TO_TELEGRAM` | no | `off` (default) keeps full-ledger backups on the server. Explicitly set `on` to send a backup file to the owner's chat weekly when the ledger changed. |
 | `FX_REFRESH` | no | `on` (default) fetches reference rates once a day for the home-currency estimate. `off` leaves the estimate out unless rates already exist. |
 | `TELEGRAM_API_ROOT` | no | Address of a local Bot API server. Tests and the pipeline point it at a stand-in. |
 | `APP_VERSION` | no | Set by the image build to the commit. Reported by `/healthz`. |

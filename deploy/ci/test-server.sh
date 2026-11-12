@@ -19,6 +19,8 @@ reject() {
 }
 
 healthy_response "$good" "$sha"
+healthy_response '<!doctype html><title>preserved legacy</title>' legacy
+reject healthy_response "$good" legacy
 reject healthy_response '<!doctype html><title>old application</title>' "$sha"
 reject healthy_response "$good" "$other"
 reject healthy_response "{\"ok\":false,\"version\":\"$sha\",\"polling\":\"ok\"}" "$sha"
