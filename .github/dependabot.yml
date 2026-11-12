@@ -37,3 +37,17 @@ updates:
       timezone: Europe/Belgrade
     open-pull-requests-limit: 3
     labels: [dependencies, deployment]
+    ignore:
+      # The runtime stays on a long-term-support line. Moving to the next one is a deliberate change,
+      # made together with the Node versions the pipeline tests.
+      - dependency-name: node
+        update-types: ["version-update:semver-major"]
+  - package-ecosystem: docker-compose
+    directory: /deploy
+    schedule:
+      interval: weekly
+      day: monday
+      time: "08:00"
+      timezone: Europe/Belgrade
+    open-pull-requests-limit: 2
+    labels: [dependencies, deployment]

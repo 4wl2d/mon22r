@@ -1,0 +1,22 @@
+{
+	# Certificates for {$DOMAIN} are issued and renewed automatically and kept in the caddy-data volume.
+	# The admin endpoint stays on its default, inside the container only; `caddy reload` uses it.
+	servers {
+		timeouts {
+			read_header 10s
+		}
+	}
+}
+
+{$DOMAIN} {
+	encode zstd gzip
+
+	# The application sets its own security and cache headers. The server banner adds nothing.
+	header -Server
+
+	reverse_proxy app:3000 {
+		# While the application restarts during a release, wait for it instead of answering 502.
+		lb_try_duration 10s
+		lb_try_interval 250ms
+	}
+}

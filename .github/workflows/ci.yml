@@ -9,9 +9,11 @@ on:
 permissions:
   contents: read
 
+# A newer push to a pull request replaces the older run. Runs on main are never cancelled:
+# one of them may be in the middle of a release.
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   validate:
@@ -41,39 +43,166 @@ jobs:
       - name: Audit production dependencies
         if: matrix.node == 22
         run: pnpm audit --prod --audit-level=high
+      - name: Check formatting and lint
+        run: pnpm check
+      - name: Lint and test the release scripts
+        if: matrix.node == 22
+        run: |
+          shellcheck -x deploy/server/*.sh deploy/ci/*.sh
+          bash deploy/ci/test-server.sh
       - name: Typecheck source and tests
         run: pnpm typecheck
-      - name: Test synthetic and in-memory fixtures
+      - name: Test
         run: pnpm test
-      - name: Build server
-        run: pnpm --filter @mon22r/server build
-      - name: Build Mini App
-        run: pnpm --filter @mon22r/miniapp build
-      - name: Upload Mini App preview bundle
-        if: matrix.node == 22
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: miniapp-preview
-          path: apps/miniapp/dist/
-          if-no-files-found: error
-          retention-days: 7
+      - name: Build server and Mini App
+        run: pnpm build
 
-  container:
-    name: Container
-    runs-on: ubuntu-24.04
+  image:
+    name: Image
+    # The production host is arm64, so the image is built and exercised on arm64.
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 20
+    env:
+      IMAGE: mon22r:${{ github.sha }}
     steps:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Build the deployment image without publishing
-        run: docker build --tag mon22r:ci .
-      - name: Verify packaged entry points without starting the bot
+      - name: Build the image
+        run: docker build --build-arg "APP_VERSION=$GITHUB_SHA" --tag "$IMAGE" .
+      - name: Check the packaged build
         run: |
-          docker run --rm --entrypoint sh mon22r:ci -c '
-            test -s apps/miniapp/dist/index.html &&
-            test -s apps/server/dist/main.js &&
-            node --check apps/server/dist/main.js
-          '
-          docker compose config --no-env-resolution --no-interpolate --quiet
+          test "$(docker run --rm --entrypoint id "$IMAGE" -u)" != "0"
+          docker run --rm --read-only --tmpfs /tmp --cap-drop ALL --network none "$IMAGE" \
+            node apps/server/dist/tools.js selfcheck
+          echo "Image size: $(docker image inspect "$IMAGE" --format '{{.Size}}' | numfmt --to=iec)" >> "$GITHUB_STEP_SUMMARY"
+      - name: Boot the image against a stand-in Bot API
+        run: |
+          node deploy/ci/stub-telegram.mjs 8081 stub.log &
+          docker run --detach --name app \
+            --read-only --tmpfs /tmp --cap-drop ALL --security-opt no-new-privileges:true \
+            --add-host host.docker.internal:host-gateway --publish 127.0.0.1:3000:3000 \
+            --env BOT_TOKEN=1000000:pipeline-token-opens-no-real-bot \
+            --env ALLOWED_TELEGRAM_IDS=42 \
+            --env MINI_APP_URL=https://ledger.test \
+            --env TELEGRAM_API_ROOT=http://host.docker.internal:8081 \
+            --env FX_REFRESH=off \
+            --volume app-data:/data --volume app-backups:/backups \
+            "$IMAGE"
+
+          body=""
+          for _ in $(seq 1 60); do
+            body="$(curl -fsS --max-time 2 http://127.0.0.1:3000/healthz || true)"
+            if [[ "$body" == *'"polling":"ok"'* && "$body" == *"\"version\":\"$GITHUB_SHA\""* ]]; then break; fi
+            sleep 1
+          done
+          echo "healthz: $body"
+          if [[ "$body" != *'"ok":true'* || "$body" != *'"polling":"ok"'* || "$body" != *"\"version\":\"$GITHUB_SHA\""* ]]; then
+            docker logs app
+            exit 1
+          fi
+
+          # The bot answered the queued /start, the page is served with its security policy, and the API is closed.
+          for _ in $(seq 1 20); do grep -q '^sendMessage' stub.log && break; sleep 0.5; done
+          grep -q '^sendMessage' stub.log
+          curl -fsSI http://127.0.0.1:3000/ | grep -qi '^content-security-policy:'
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:3000/api/me)" = "401"
+
+          # The image's own health probe agrees.
+          status=""
+          for _ in $(seq 1 45); do
+            status="$(docker inspect app --format '{{.State.Health.Status}}')"
+            [[ "$status" == "healthy" ]] && break
+            sleep 1
+          done
+          test "$status" = "healthy"
+
+          # SIGTERM ends it cleanly, with the handled update confirmed to the Bot API.
+          docker stop -t 15 app
+          test "$(docker inspect app --format '{{.State.ExitCode}}')" = "0"
+          docker logs app 2>&1 | grep -q '"message":"stopped"'
+          tail -n 1 stub.log | grep -q 'getUpdates offset=2'
+      - name: Check the stack definition and the proxy configuration
+        run: |
+          touch deploy/.env
+          MON22R_IMAGE="$IMAGE" DOMAIN=ledger.test docker compose -f deploy/compose.yml config --quiet
+          caddy="$(MON22R_IMAGE="$IMAGE" DOMAIN=ledger.test docker compose -f deploy/compose.yml config --images | grep caddy)"
+          docker run --rm --env DOMAIN=ledger.test --volume "$PWD/deploy/Caddyfile:/etc/caddy/Caddyfile:ro" "$caddy" \
+            caddy validate --config /etc/caddy/Caddyfile
+      - name: Pack the image
+        run: |
+          mkdir release
+          docker save "$IMAGE" | gzip -6 > release/image.tar.gz
+          (cd release && sha256sum image.tar.gz > image.sha256)
+          ls -l release
+      # On main this is the file the release job installs. On a pull request it allows a rehearsal of the release.
+      - name: Keep the image
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: image-${{ github.sha }}
+          path: release/
+          if-no-files-found: error
+          retention-days: ${{ github.ref == 'refs/heads/main' && 14 || 3 }}
+          compression-level: 0
+
+  deploy:
+    name: Release to production
+    needs: [validate, image]
+    # Only what passed every gate on main is released, and only once the server has been prepared.
+    if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main' && vars.DEPLOY_ENABLED == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment: production
+    # Releases run one at a time and are never interrupted. A newer one waits for the one in progress.
+    concurrency:
+      group: production
+      cancel-in-progress: false
+    steps:
+      - name: Ignore a superseded release
+        id: current
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          latest="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')"
+          if [[ "$latest" == "$GITHUB_SHA" ]]; then
+            echo "deploy=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "A newer main revision exists; this run will not replace it." >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Check out the release scripts
+        if: steps.current.outputs.deploy == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Fetch the image that was tested
+        if: steps.current.outputs.deploy == 'true'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: image-${{ github.sha }}
+          path: release
+      - name: Verify the image file
+        if: steps.current.outputs.deploy == 'true'
+        run: cd release && sha256sum --check image.sha256
+      - name: Release
+        if: steps.current.outputs.deploy == 'true'
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+        run: |
+          install -m 700 -d ~/.ssh
+          (umask 077 && printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key)
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          ssh_options=(-i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes
+            -o UserKnownHostsFile="$HOME/.ssh/known_hosts" -o ConnectTimeout=20 -o ServerAliveInterval=15)
+          target="$DEPLOY_USER@$DEPLOY_HOST"
+          incoming="/opt/mon22r/incoming/$GITHUB_SHA"
+          trap 'ssh "${ssh_options[@]}" "$target" "rm -rf $incoming" || true; rm -f ~/.ssh/deploy_key' EXIT
+
+          ssh "${ssh_options[@]}" "$target" "mkdir -p $incoming"
+          scp "${ssh_options[@]}" release/image.tar.gz release/image.sha256 deploy/compose.yml deploy/Caddyfile \
+            deploy/server/*.sh "$target:$incoming/"
+          ssh "${ssh_options[@]}" "$target" "bash $incoming/deploy.sh $GITHUB_SHA $incoming"
+          echo "Released \`${GITHUB_SHA:0:7}\`." >> "$GITHUB_STEP_SUMMARY"

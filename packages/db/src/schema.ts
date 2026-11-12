@@ -1,5 +1,5 @@
-import { index, integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 import { sql } from "drizzle-orm";
+import { index, integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 
 /**
  * User-owned rows are always queried with that user's id.
@@ -21,6 +21,8 @@ export const users = sqliteTable(
     onboardingStep: text("onboarding_step"),
     /** Last unrecognized CSV header, so a restart can still save a column mapping. */
     pendingCsvJson: text("pending_csv_json"),
+    /** Account that receives an amount written without a currency. Null falls back to the home currency. */
+    defaultAccountId: text("default_account_id"),
   },
   (table) => [uniqueIndex("users_telegram_id_unique").on(table.telegramId)],
 );
@@ -73,10 +75,14 @@ export const transactions = sqliteTable(
     occurredAt: text("occurred_at").notNull(),
     description: text("description").notNull(),
     createdAt: text("created_at").notNull(),
+    /** `noteKey(description)`. Empty for rows written by a release older than migration 003 until the next start. */
+    noteKey: text("note_key").notNull().default(""),
   },
   (table) => [
     index("transactions_user_occurred_idx").on(table.userId, table.occurredAt),
     index("transactions_user_transfer_idx").on(table.userId, table.transferGroupId),
+    index("transactions_user_note_idx").on(table.userId, table.noteKey, table.createdAt),
+    index("transactions_user_created_idx").on(table.userId, table.createdAt),
   ],
 );
 
@@ -161,9 +167,7 @@ export const importExternalKeys = sqliteTable(
       .references(() => transactions.id),
     createdAt: text("created_at").notNull(),
   },
-  (table) => [
-    uniqueIndex("import_external_keys_identity_unique").on(table.userId, table.source, table.externalKey),
-  ],
+  (table) => [uniqueIndex("import_external_keys_identity_unique").on(table.userId, table.source, table.externalKey)],
 );
 
 export const statementProfiles = sqliteTable(
@@ -199,3 +203,16 @@ export const importPreviews = sqliteTable(
   },
   (table) => [index("import_previews_user_idx").on(table.userId)],
 );
+
+/** Telegram update ids that already changed the ledger. A redelivered update is answered, not applied again. */
+export const handledUpdates = sqliteTable("handled_updates", {
+  updateId: integer("update_id").primaryKey(),
+  handledAt: text("handled_at").notNull(),
+});
+
+/** Small runtime facts that must survive a restart, such as the time of the last backup. */
+export const appState = sqliteTable("app_state", {
+  key: text("key").primaryKey(),
+  value: text("value").notNull(),
+  updatedAt: text("updated_at").notNull(),
+});

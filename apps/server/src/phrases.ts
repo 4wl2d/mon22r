@@ -1,25 +1,21 @@
 import {
+  type CalendarMonth,
+  CURRENCY_TOKEN,
   LedgerError,
   monthContaining,
+  type ParsedAmount,
   parseAmount,
   zonedDateTimeToUtc,
-  type CalendarMonth,
 } from "@mon22r/domain";
 
-export type ExpensePhrase = {
-  readonly type: "expense";
+export type MovementPhrase = {
+  readonly type: "expense" | "income" | "refund";
   readonly note: string;
   readonly amountMinor: number;
   readonly currency: string | null;
   readonly occurredAt: string;
-};
-
-export type IncomePhrase = {
-  readonly type: "income";
-  readonly note: string;
-  readonly amountMinor: number;
-  readonly currency: string | null;
-  readonly occurredAt: string;
+  /** Text of a `#category` tag, with underscores read as spaces. */
+  readonly categoryName: string | null;
 };
 
 export type PlanPhrase = {
@@ -35,11 +31,17 @@ export type TransferPhrase = {
   readonly type: "transfer";
   readonly amountMinor: number;
   readonly currency: string | null;
-  readonly destinationName: string;
+  /** Account named after `с` / `из`. Null picks the usual account of the amount's currency. */
+  readonly sourceName: string | null;
+  /**
+   * Everything after `на` / `в`: an account name, optionally followed by the amount that arrived
+   * when the two accounts hold different currencies.
+   */
+  readonly destinationText: string;
   readonly occurredAt: string;
 };
 
-export type ParsedPhrase = ExpensePhrase | IncomePhrase | PlanPhrase | TransferPhrase;
+export type ParsedPhrase = MovementPhrase | PlanPhrase | TransferPhrase;
 
 const DATE_OFFSET: Readonly<Record<string, number>> = {
   сегодня: 0,
@@ -47,28 +49,12 @@ const DATE_OFFSET: Readonly<Record<string, number>> = {
   позавчера: -2,
 };
 
-const AMOUNT_START = /(?:^|\s)(?:(?:£|₽|руб|р|[A-Za-z]{3})\s+)?\d/giu;
-
-export function normalizeNote(value: string): string {
-  return value.trim().toLowerCase().replace(/\s+/g, " ");
-}
-
-export function rememberedCategoryId(
-  note: string,
-  history: readonly { readonly description: string; readonly categoryId: string | null; readonly createdAt: string; readonly id?: string }[],
-): string | null {
-  const key = normalizeNote(note);
-  if (key.length === 0) return null;
-  let best: { readonly categoryId: string; readonly createdAt: string; readonly id: string } | null = null;
-  for (const row of history) {
-    if (row.categoryId === null || normalizeNote(row.description) !== key) continue;
-    const id = row.id ?? "";
-    if (best === null || row.createdAt > best.createdAt || (row.createdAt === best.createdAt && id > best.id)) {
-      best = { categoryId: row.categoryId, createdAt: row.createdAt, id };
-    }
-  }
-  return best?.categoryId ?? null;
-}
+/**
+ * Every place an amount may start: after the start or a space, at a digit or at a currency mark before one.
+ * The lookahead consumes nothing, so `city bus 150` yields both `bus 150` and `150` as candidates.
+ */
+const AMOUNT_START = new RegExp(`(?:^|\\s)(?=(?:(?:${CURRENCY_TOKEN})\\s*)?\\d)`, "giu");
+const TAG = /(?:^|\s)#([\p{L}\p{N}_-]+)/gu;
 
 export function nextCalendarMonth(now: Date, timeZone: string): CalendarMonth {
   const current = monthContaining(now, timeZone);
@@ -76,38 +62,44 @@ export function nextCalendarMonth(now: Date, timeZone: string): CalendarMonth {
   return { year: current.year, month: current.month + 1 };
 }
 
-export function parsePhrase(text: string, now: Date, timeZone: string): ParsedPhrase | null {
-  const normalized = normalizeSpace(text);
+/**
+ * Reads one chat line.
+ * `bareCurrency` is the currency of an amount written without one; it decides the decimal places.
+ */
+export function parsePhrase(text: string, now: Date, timeZone: string, bareCurrency?: string): ParsedPhrase | null {
+  const tagged = peelTag(normalizeSpace(text));
+  const normalized = tagged.rest;
   if (normalized.length === 0 || normalized.startsWith("/")) return null;
   const classified = classify(normalized);
-  const dated = peelDate(classified.rest);
-  const occurredAt = shiftLocalDays(now, timeZone, dated.offset);
-  if (classified.kind === "transfer") return parseTransfer(dated.rest, occurredAt);
-  if (classified.kind === "plan") return parsePlan(dated.rest, now, timeZone);
-  const split = splitNoteAndAmount(dated.rest);
+  const dated = peelDate(classified.rest, now, timeZone);
+  if (dated === null) return null;
+  if (classified.kind === "transfer") return parseTransfer(dated.rest, dated.occurredAt, bareCurrency);
+  if (classified.kind === "plan") return parsePlan(dated.rest, now, timeZone, bareCurrency);
+  const split = splitNoteAndAmount(dated.rest, bareCurrency);
   if (split === null) return null;
-  if (classified.kind === "income") {
-    return {
-      type: "income",
-      note: split.note,
-      amountMinor: split.amount.minor,
-      currency: split.amount.currency,
-      occurredAt,
-    };
-  }
   return {
-    type: "expense",
+    type: classified.kind,
     note: split.note,
     amountMinor: split.amount.minor,
     currency: split.amount.currency,
-    occurredAt,
+    occurredAt: dated.occurredAt,
+    categoryName: tagged.tag,
   };
 }
 
-function parsePlan(rest: string, now: Date, timeZone: string): PlanPhrase | null {
+/** Splits `name 58600` into the name and the trailing amount. Null when the text has no trailing amount. */
+export function splitTrailingAmount(
+  text: string,
+  fallbackCurrency: string,
+): { readonly name: string; readonly amount: ParsedAmount } | null {
+  const split = splitNoteAndAmount(text, fallbackCurrency);
+  return split === null ? null : { name: split.note, amount: split.amount };
+}
+
+function parsePlan(rest: string, now: Date, timeZone: string, bareCurrency: string | undefined): PlanPhrase | null {
   const peeled = peelDay(rest);
   if (peeled === null) return null;
-  const split = splitNoteAndAmount(peeled.rest);
+  const split = splitNoteAndAmount(peeled.rest, bareCurrency);
   if (split === null) return null;
   return {
     type: "plan",
@@ -119,18 +111,21 @@ function parsePlan(rest: string, now: Date, timeZone: string): PlanPhrase | null
   };
 }
 
-function parseTransfer(rest: string, occurredAt: string): TransferPhrase | null {
-  const match = /^(.+?)\s+на\s+(.+)$/iu.exec(rest);
+function parseTransfer(rest: string, occurredAt: string, bareCurrency: string | undefined): TransferPhrase | null {
+  const match = /^(.+?)(?:\s+(?:с|со|из)\s+(.+?))?\s+(?:на|в)\s+(.+)$/iu.exec(rest);
   const amountText = match?.[1]?.trim();
-  const destinationName = match?.[2]?.trim();
-  if (amountText === undefined || destinationName === undefined || destinationName.length === 0) return null;
+  const sourceName = match?.[2]?.trim() ?? null;
+  const destinationText = match?.[3]?.trim();
+  if (amountText === undefined || destinationText === undefined || destinationText.length === 0) return null;
   try {
-    const amount = parseAmount(amountText);
+    const amount = parseAmount(amountText, bareCurrency);
+    if (amount.minor <= 0) return null;
     return {
       type: "transfer",
       amountMinor: amount.minor,
       currency: amount.currency,
-      destinationName,
+      sourceName: sourceName === null || sourceName.length === 0 ? null : sourceName,
+      destinationText,
       occurredAt,
     };
   } catch {
@@ -138,19 +133,71 @@ function parseTransfer(rest: string, occurredAt: string): TransferPhrase | null 
   }
 }
 
-function classify(input: string): { readonly kind: "plan" | "transfer" | "income" | "expense"; readonly rest: string } {
-  if (/^план(?:\s+|$)/iu.test(input)) return { kind: "plan", rest: input.replace(/^план(?:\s+|$)/iu, "").trim() };
-  if (/^перевод(?:\s+|$)/iu.test(input)) return { kind: "transfer", rest: input.replace(/^перевод(?:\s+|$)/iu, "").trim() };
+function classify(input: string): {
+  readonly kind: "plan" | "transfer" | "income" | "refund" | "expense";
+  readonly rest: string;
+} {
+  for (const [word, kind] of [
+    ["план", "plan"],
+    ["перевод", "transfer"],
+    ["возврат", "refund"],
+  ] as const) {
+    const prefix = new RegExp(`^${word}(?:\\s+|$)`, "iu");
+    if (prefix.test(input)) return { kind, rest: input.replace(prefix, "").trim() };
+  }
   if (input.startsWith("+")) return { kind: "income", rest: input.slice(1).trim() };
   return { kind: "expense", rest: input };
 }
 
-function peelDate(input: string): { readonly rest: string; readonly offset: number } {
-  const match = /^(сегодня|вчера|позавчера)(?:\s+|$)/iu.exec(input);
-  const word = match?.[1]?.toLowerCase();
-  const full = match?.[0];
-  if (word === undefined || full === undefined) return { rest: input, offset: 0 };
-  return { rest: input.slice(full.length).trim(), offset: DATE_OFFSET[word] ?? 0 };
+function peelTag(input: string): { readonly rest: string; readonly tag: string | null } {
+  let tag: string | null = null;
+  const rest = input.replace(TAG, (_match, name: string) => {
+    tag ??= name.replaceAll("_", " ").trim();
+    return " ";
+  });
+  return { rest: normalizeSpace(rest), tag: tag === null || tag === "" ? null : tag };
+}
+
+/**
+ * Leading `вчера`, `позавчера`, or a calendar date such as `5.11` or `05.11.2026`.
+ * A date keeps the current time of day. Without a year it is the latest such day that is not in the future.
+ * Returns null for a date that does not exist or lies ahead.
+ */
+function peelDate(
+  input: string,
+  now: Date,
+  timeZone: string,
+): { readonly rest: string; readonly occurredAt: string } | null {
+  const word = /^(сегодня|вчера|позавчера)(?:\s+|$)/iu.exec(input);
+  if (word?.[1] !== undefined) {
+    const offset = DATE_OFFSET[word[1].toLowerCase()] ?? 0;
+    return { rest: input.slice(word[0].length).trim(), occurredAt: shiftLocalDays(now, timeZone, offset) };
+  }
+  const undated = { rest: input, occurredAt: now.toISOString() };
+  // The month takes two digits, so `1.5 литра молока 200` stays a note.
+  const dated = /^(\d{1,2})\.(\d{2})(?:\.(\d{4}))?\s+(?=\S)/u.exec(input);
+  if (dated?.[1] === undefined || dated[2] === undefined) return undated;
+  const rest = input.slice(dated[0].length).trim();
+  // `12.50 кофе` has no amount left after the "date", so the number is not a date.
+  if (!/\d/u.test(rest)) return undated;
+  const clock = zonedClock(now, timeZone);
+  const day = Number(dated[1]);
+  const month = Number(dated[2]);
+  let year = dated[3] === undefined ? clock.year : Number(dated[3]);
+  if (month < 1 || month > 12 || day < 1 || day > 31) return undated;
+  if (dated[3] === undefined && (month > clock.month || (month === clock.month && day > clock.day))) year -= 1;
+  if (day > new Date(Date.UTC(year, month, 0)).getUTCDate()) return null;
+  const occurredAt = zonedDateTimeToUtc({
+    year,
+    month,
+    day,
+    hour: clock.hour,
+    minute: clock.minute,
+    second: clock.second,
+    timeZone,
+  });
+  if (occurredAt.getTime() > now.getTime()) return null;
+  return { rest, occurredAt: occurredAt.toISOString() };
 }
 
 function peelDay(input: string): { readonly rest: string; readonly day: number } | null {
@@ -163,30 +210,34 @@ function peelDay(input: string): { readonly rest: string; readonly day: number }
   return { rest, day };
 }
 
-function splitNoteAndAmount(input: string): { readonly note: string; readonly amount: ReturnType<typeof parseAmount> } | null {
-  const starts: number[] = [];
+function splitNoteAndAmount(
+  input: string,
+  bareCurrency: string | undefined,
+): { readonly note: string; readonly amount: ParsedAmount } | null {
   for (const match of input.matchAll(AMOUNT_START)) {
-    const token = match[0];
-    const index = match.index ?? 0;
-    starts.push(/^\s/u.test(token) ? index + 1 : index);
-  }
-  for (const start of starts) {
-    const suffix = input.slice(start).trim();
-    try {
-      const amount = parseAmount(suffix);
-      const note = input.slice(0, start).trim();
-      if (note.length === 0) continue;
-      return { note, amount };
-    } catch {
-      continue;
-    }
+    const start = (match.index ?? 0) + match[0].length;
+    const note = input.slice(0, start).trim();
+    if (note.length === 0) continue;
+    const amount = tryAmount(input.slice(start).trim(), bareCurrency);
+    if (amount !== null && amount.minor > 0) return { note, amount };
   }
   return null;
 }
 
+function tryAmount(text: string, bareCurrency: string | undefined): ParsedAmount | null {
+  try {
+    return parseAmount(text, bareCurrency);
+  } catch (error) {
+    if (error instanceof LedgerError) return null;
+    throw error;
+  }
+}
+
 export function shiftLocalDays(now: Date, timeZone: string, dayOffset: number): string {
   const parts = zonedClock(now, timeZone);
-  const shifted = new Date(Date.UTC(parts.year, parts.month - 1, parts.day + dayOffset, parts.hour, parts.minute, parts.second));
+  const shifted = new Date(
+    Date.UTC(parts.year, parts.month - 1, parts.day + dayOffset, parts.hour, parts.minute, parts.second),
+  );
   return zonedDateTimeToUtc({
     year: shifted.getUTCFullYear(),
     month: shifted.getUTCMonth() + 1,
@@ -198,7 +249,10 @@ export function shiftLocalDays(now: Date, timeZone: string, dayOffset: number): 
   }).toISOString();
 }
 
-function zonedClock(instant: Date, timeZone: string): {
+function zonedClock(
+  instant: Date,
+  timeZone: string,
+): {
   readonly year: number;
   readonly month: number;
   readonly day: number;
@@ -228,9 +282,16 @@ function zonedClock(instant: Date, timeZone: string): {
     return Number(raw);
   };
   const hour = read("hour") === 24 ? 0 : read("hour");
-  return { year: read("year"), month: read("month"), day: read("day"), hour, minute: read("minute"), second: read("second") };
+  return {
+    year: read("year"),
+    month: read("month"),
+    day: read("day"),
+    hour,
+    minute: read("minute"),
+    second: read("second"),
+  };
 }
 
 function normalizeSpace(input: string): string {
-  return input.replace(/[\u00A0\u202F\u2009]/g, " ").replace(/\s+/g, " ").trim();
+  return input.replace(/[   ]/g, " ").replace(/\s+/g, " ").trim();
 }

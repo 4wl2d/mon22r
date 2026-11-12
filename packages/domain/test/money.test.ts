@@ -1,6 +1,5 @@
-import { describe, expect, it } from "vitest";
-
 import { LedgerError, parseAmount } from "@mon22r/domain";
+import { describe, expect, it } from "vitest";
 
 describe("parseAmount", () => {
   it("parses spaced comma decimals, dotted decimals, and whole amounts", () => {

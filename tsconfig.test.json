@@ -1,7 +1,7 @@
 {
   "compilerOptions": {
     "target": "ES2022",
-    "lib": ["ES2022"],
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "module": "ESNext",
     "moduleResolution": "Bundler",
     "strict": true,
@@ -21,5 +21,5 @@
       "@mon22r/importers": ["./packages/importers/src/index.ts"]
     }
   },
-  "include": ["packages/*/test/**/*.ts", "apps/server/test/**/*.ts", "apps/server/src/**/*.ts", "vitest.config.ts"]
+  "include": ["packages/*/test/**/*.ts", "apps/*/test/**/*.ts", "apps/server/src/**/*.ts", "vitest.config.ts"]
 }

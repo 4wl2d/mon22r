@@ -12,7 +12,8 @@ export function telegramUserId(header: string | undefined, botToken: string, all
   if (header === undefined) throw new AccessError();
   const trimmed = header.trim();
   const prefix = "tma ";
-  if (trimmed.length <= prefix.length || trimmed.slice(0, prefix.length).toLowerCase() !== prefix) throw new AccessError();
+  if (trimmed.length <= prefix.length || trimmed.slice(0, prefix.length).toLowerCase() !== prefix)
+    throw new AccessError();
   const raw = trimmed.slice(prefix.length);
   try {
     validate(raw, botToken, { expiresIn: 86_400 });

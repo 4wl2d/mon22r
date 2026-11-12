@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
-
-import { and, desc, eq, gte, inArray, lt } from "drizzle-orm";
 import {
+  type Account,
   assertAccountCurrency,
   assertCurrency,
   assertFxRate,
@@ -9,32 +8,33 @@ import {
   assertOwnedCategory,
   assertTimeZone,
   assertUserId,
-  canonicalTimestamp,
   createAccount as buildAccount,
   createCategory as buildCategory,
   createIncomeExpectation as buildIncomeExpectation,
   createIncomePlan as buildIncomePlan,
+  type CalendarMonth,
+  type Category,
+  type CurrencyCode,
+  canonicalTimestamp,
   createTransaction,
   createTransfer,
   createUserProfile,
   DEFAULT_TIME_ZONE,
-  expectationFromPlan,
-  LedgerError,
-  matchInflowToExpectation,
-  type Account,
-  type CalendarMonth,
-  type Category,
-  type CurrencyCode,
   type ExpectationStatus,
+  expectationFromPlan,
   type FxRate,
   type ImportIdentity,
   type IncomeExpectation,
   type IncomePlan,
+  LedgerError,
   type Money,
+  matchInflowToExpectation,
+  noteKey,
   type PlanRecurrence,
   type Transaction,
   type User,
 } from "@mon22r/domain";
+import { and, desc, eq, gte, inArray, isNull, lt, sql } from "drizzle-orm";
 
 import type { Mon22rDb } from "./client.js";
 import {
@@ -186,13 +186,16 @@ export function createAccount(
 
 export function listAccounts(db: Mon22rDb, userId: string): readonly Account[] {
   const owner = assertUserId(userId);
-  return db.orm
-    .select()
-    .from(accounts)
-    .where(eq(accounts.userId, owner))
-    .orderBy(accounts.createdAt, accounts.id)
-    .all()
-    .map(toAccount);
+  return (
+    db.orm
+      .select()
+      .from(accounts)
+      .where(eq(accounts.userId, owner))
+      // Insertion order settles accounts created in the same millisecond.
+      .orderBy(accounts.createdAt, sql`${accounts}.rowid`)
+      .all()
+      .map(toAccount)
+  );
 }
 
 export function createCategory(
@@ -249,7 +252,12 @@ export function recordTransaction(
   const owner = assertUserId(userId);
   const apply = db.sqlite.transaction(() => {
     if (input.importIdentity) {
-      const existing = findTransactionByImportKey(db, owner, input.importIdentity.source, input.importIdentity.externalKey);
+      const existing = findTransactionByImportKey(
+        db,
+        owner,
+        input.importIdentity.source,
+        input.importIdentity.externalKey,
+      );
       if (existing) return { status: "duplicate" as const, transaction: existing };
     }
     const account = requireAccount(db, owner, input.accountId);
@@ -369,25 +377,25 @@ export function listTransactions(
     .map(fromJoined);
 }
 
-/** Latest inserted transaction for this user. This is the row `/undo` should remove. */
+/**
+ * Latest transaction this user entered by hand. This is the row `/undo` should remove.
+ * Imported statement lines are skipped: they share one timestamp, so "latest" would be an arbitrary line.
+ */
 export function latestTransaction(db: Mon22rDb, userId: string): Transaction | null {
   const owner = assertUserId(userId);
   const row = db.orm
-    .select({
-      row: transactions,
-      source: importExternalKeys.source,
-      externalKey: importExternalKeys.externalKey,
-    })
+    .select({ row: transactions })
     .from(transactions)
     .leftJoin(
       importExternalKeys,
       and(eq(importExternalKeys.transactionId, transactions.id), eq(importExternalKeys.userId, owner)),
     )
-    .where(eq(transactions.userId, owner))
-    .orderBy(desc(transactions.createdAt), desc(transactions.id))
+    .where(and(eq(transactions.userId, owner), isNull(importExternalKeys.id)))
+    // Insertion order breaks a tie between rows created in the same millisecond.
+    .orderBy(desc(transactions.createdAt), desc(sql`${transactions}.rowid`))
     .limit(1)
     .get();
-  return row === undefined ? null : fromJoined(row);
+  return row === undefined ? null : toTransaction(row.row, null);
 }
 
 export function findTransactionByImportKey(
@@ -711,12 +719,7 @@ export function matchInflowAndSave(
   const open = db.orm
     .select()
     .from(incomeExpectations)
-    .where(
-      and(
-        eq(incomeExpectations.userId, owner),
-        inArray(incomeExpectations.status, ["expected", "partial"]),
-      ),
-    )
+    .where(and(eq(incomeExpectations.userId, owner), inArray(incomeExpectations.status, ["expected", "partial"])))
     .all()
     .map(toExpectation);
   const match = matchInflowToExpectation(
@@ -761,8 +764,46 @@ export function upsertFxRate(db: Mon22rDb, rate: FxRate): FxRate {
       .run();
     return valid;
   }
-  db.orm.insert(fxRates).values({ id: randomUUID(), ...valid }).run();
+  db.orm
+    .insert(fxRates)
+    .values({ id: randomUUID(), ...valid })
+    .run();
   return valid;
+}
+
+/**
+ * Saves the current rate of a pair and drops that source's older rows for it.
+ * Estimates always use the latest rate, so history would only slow every month view down.
+ */
+export function replaceFxRate(db: Mon22rDb, rate: FxRate): FxRate {
+  const apply = db.sqlite.transaction(() => {
+    const saved = upsertFxRate(db, rate);
+    db.orm
+      .delete(fxRates)
+      .where(
+        and(
+          eq(fxRates.baseCurrency, saved.baseCurrency),
+          eq(fxRates.quoteCurrency, saved.quoteCurrency),
+          eq(fxRates.source, saved.source),
+          lt(fxRates.asOf, saved.asOf),
+        ),
+      )
+      .run();
+    return saved;
+  });
+  return apply();
+}
+
+/** Each home currency with the other currencies its user holds accounts in. */
+export function listFxPairsInUse(
+  db: Mon22rDb,
+): readonly { readonly homeCurrency: string; readonly currency: string }[] {
+  return db.orm
+    .selectDistinct({ homeCurrency: users.homeCurrency, currency: accounts.currency })
+    .from(users)
+    .innerJoin(accounts, eq(accounts.userId, users.id))
+    .all()
+    .filter((row) => row.homeCurrency !== row.currency);
 }
 
 export function listFxRates(db: Mon22rDb): readonly FxRate[] {
@@ -824,6 +865,7 @@ function insertTransaction(db: Mon22rDb, transaction: Transaction): void {
       occurredAt: transaction.occurredAt,
       description: transaction.description,
       createdAt: transaction.createdAt,
+      noteKey: noteKey(transaction.description),
     })
     .run();
 }
@@ -1085,13 +1127,21 @@ function isUniqueConstraint(error: unknown): boolean {
 
 export type OnboardingStep = "timezone" | "accounts";
 
-export function readUserFlags(
-  db: Mon22rDb,
-  userId: string,
-): { readonly onboardingStep: OnboardingStep | null; readonly pendingCsvJson: string | null } | null {
+export type UserFlags = {
+  readonly onboardingStep: OnboardingStep | null;
+  readonly pendingCsvJson: string | null;
+  /** Account for an amount written without a currency. */
+  readonly defaultAccountId: string | null;
+};
+
+export function readUserFlags(db: Mon22rDb, userId: string): UserFlags | null {
   const owner = assertUserId(userId);
   const row = db.orm
-    .select({ onboardingStep: users.onboardingStep, pendingCsvJson: users.pendingCsvJson })
+    .select({
+      onboardingStep: users.onboardingStep,
+      pendingCsvJson: users.pendingCsvJson,
+      defaultAccountId: users.defaultAccountId,
+    })
     .from(users)
     .where(eq(users.id, owner))
     .get();
@@ -1099,6 +1149,7 @@ export function readUserFlags(
   return {
     onboardingStep: onboardingStepOf(row.onboardingStep),
     pendingCsvJson: row.pendingCsvJson,
+    defaultAccountId: row.defaultAccountId,
   };
 }
 
@@ -1110,6 +1161,8 @@ export function updateStoredUser(
     readonly timeZone?: string;
     readonly onboardingStep?: OnboardingStep | null;
     readonly pendingCsvJson?: string | null;
+    /** Must be one of this user's active accounts. Null clears the choice. */
+    readonly defaultAccountId?: string | null;
   },
 ): User {
   const owner = assertUserId(userId);
@@ -1122,9 +1175,16 @@ export function updateStoredUser(
     timeZone: string;
     onboardingStep?: string | null;
     pendingCsvJson?: string | null;
+    defaultAccountId?: string | null;
   } = { homeCurrency, timeZone };
   if (patch.onboardingStep !== undefined) set.onboardingStep = patch.onboardingStep;
   if (patch.pendingCsvJson !== undefined) set.pendingCsvJson = patch.pendingCsvJson;
+  if (patch.defaultAccountId !== undefined) {
+    if (patch.defaultAccountId !== null && requireAccount(db, owner, patch.defaultAccountId).archived) {
+      throw new LedgerError("invalid_posting", "An archived account cannot be the default");
+    }
+    set.defaultAccountId = patch.defaultAccountId;
+  }
   db.orm.update(users).set(set).where(eq(users.id, owner)).run();
   return { ...existing, homeCurrency, timeZone };
 }
@@ -1159,12 +1219,23 @@ export function updateAccount(
     archived: patch.archived ?? existing.archived,
     createdAt: existing.createdAt,
   });
-  const result = db.orm
-    .update(accounts)
-    .set({ name: next.name, archived: next.archived ? 1 : 0 })
-    .where(and(eq(accounts.userId, owner), eq(accounts.id, existing.id)))
-    .run();
-  if (result.changes === 0) throw new LedgerError("account_not_found", "Account was not found for this user");
+  const apply = db.sqlite.transaction(() => {
+    const result = db.orm
+      .update(accounts)
+      .set({ name: next.name, archived: next.archived ? 1 : 0 })
+      .where(and(eq(accounts.userId, owner), eq(accounts.id, existing.id)))
+      .run();
+    if (result.changes === 0) throw new LedgerError("account_not_found", "Account was not found for this user");
+    if (next.archived) {
+      // An archived account takes no new entries, so it stops being the default.
+      db.orm
+        .update(users)
+        .set({ defaultAccountId: null })
+        .where(and(eq(users.id, owner), eq(users.defaultAccountId, existing.id)))
+        .run();
+    }
+  });
+  apply();
   return next;
 }
 
@@ -1202,7 +1273,10 @@ export function correctTransaction(
   return next;
 }
 
-/** Removes one transaction for this user. A transfer removes both legs and their import keys. */
+/**
+ * Removes one transaction for this user. A transfer removes both legs and their import keys.
+ * An income line that was closed with a removed transaction is reopened by that amount.
+ */
 export function deleteTransaction(db: Mon22rDb, userId: string, id: string): readonly Transaction[] {
   const owner = assertUserId(userId);
   const existing = getTransaction(db, owner, id);
@@ -1218,11 +1292,7 @@ export function deleteTransaction(db: Mon22rDb, userId: string, id: string): rea
           .map((row) => toTransaction(row, loadIdentity(db, owner, row.id)));
   const ids = targets.map((item) => item.id);
   const apply = db.sqlite.transaction(() => {
-    db.orm
-      .update(incomeExpectations)
-      .set({ matchedTransactionId: null })
-      .where(and(eq(incomeExpectations.userId, owner), inArray(incomeExpectations.matchedTransactionId, ids)))
-      .run();
+    for (const target of targets) reopenMatchedExpectations(db, owner, target);
     db.orm
       .update(transactions)
       .set({ refundOfTransactionId: null })
@@ -1232,10 +1302,31 @@ export function deleteTransaction(db: Mon22rDb, userId: string, id: string): rea
       .delete(importExternalKeys)
       .where(and(eq(importExternalKeys.userId, owner), inArray(importExternalKeys.transactionId, ids)))
       .run();
-    db.orm.delete(transactions).where(and(eq(transactions.userId, owner), inArray(transactions.id, ids))).run();
+    db.orm
+      .delete(transactions)
+      .where(and(eq(transactions.userId, owner), inArray(transactions.id, ids)))
+      .run();
   });
   apply();
   return targets;
+}
+
+function reopenMatchedExpectations(db: Mon22rDb, owner: string, removed: Transaction): void {
+  const matched = db.orm
+    .select()
+    .from(incomeExpectations)
+    .where(and(eq(incomeExpectations.userId, owner), eq(incomeExpectations.matchedTransactionId, removed.id)))
+    .all();
+  for (const row of matched) {
+    const receivedMinor = Math.max(0, row.receivedMinor - removed.amountMinor);
+    // A line the user marked as skipped stays skipped; a closed line goes back to open.
+    const status = row.status === "skipped" ? "skipped" : receivedMinor > 0 ? "partial" : "expected";
+    db.orm
+      .update(incomeExpectations)
+      .set({ matchedTransactionId: null, receivedMinor, status })
+      .where(and(eq(incomeExpectations.userId, owner), eq(incomeExpectations.id, row.id)))
+      .run();
+  }
 }
 
 /** Deletes the row `latestTransaction` would return, including the other transfer leg. */
@@ -1243,6 +1334,32 @@ export function deleteLatestTransaction(db: Mon22rDb, userId: string): readonly 
   const latest = latestTransaction(db, userId);
   if (latest === null) return [];
   return deleteTransaction(db, userId, latest.id);
+}
+
+/**
+ * Deletes a plan's untouched lines from `from` onward. Lines with money received or a manual status stay.
+ * Used when a plan is switched off, so future months stop showing it.
+ */
+export function removeOpenExpectations(db: Mon22rDb, userId: string, planId: string, from: CalendarMonth): number {
+  const owner = assertUserId(userId);
+  const rows = db.orm
+    .select({ id: incomeExpectations.id, year: incomeExpectations.year, month: incomeExpectations.month })
+    .from(incomeExpectations)
+    .where(
+      and(
+        eq(incomeExpectations.userId, owner),
+        eq(incomeExpectations.planId, planId),
+        eq(incomeExpectations.status, "expected"),
+        eq(incomeExpectations.receivedMinor, 0),
+      ),
+    )
+    .all();
+  const ids = rows.filter((row) => row.year * 12 + row.month >= from.year * 12 + from.month).map((row) => row.id);
+  if (ids.length === 0) return 0;
+  return db.orm
+    .delete(incomeExpectations)
+    .where(and(eq(incomeExpectations.userId, owner), inArray(incomeExpectations.id, ids)))
+    .run().changes;
 }
 
 export function getIncomeExpectation(db: Mon22rDb, userId: string, id: string): IncomeExpectation | null {
@@ -1331,7 +1448,12 @@ export type ImportPreviewRecord = {
 export function insertImportPreview(
   db: Mon22rDb,
   userId: string,
-  input: { readonly source: string; readonly accountId: string | null; readonly linesJson: string; readonly id?: string },
+  input: {
+    readonly source: string;
+    readonly accountId: string | null;
+    readonly linesJson: string;
+    readonly id?: string;
+  },
 ): ImportPreviewRecord {
   const owner = assertUserId(userId);
   requireUserRow(db, owner);
@@ -1358,7 +1480,12 @@ export function readImportPreview(db: Mon22rDb, userId: string, id: string): Imp
   return row === undefined ? null : toImportPreview(row);
 }
 
-export function updateImportPreviewAccount(db: Mon22rDb, userId: string, id: string, accountId: string): ImportPreviewRecord {
+export function updateImportPreviewAccount(
+  db: Mon22rDb,
+  userId: string,
+  id: string,
+  accountId: string,
+): ImportPreviewRecord {
   const owner = assertUserId(userId);
   const existing = readImportPreview(db, owner, id);
   if (existing === null) throw new LedgerError("not_found", "Import preview was not found for this user");
@@ -1372,9 +1499,17 @@ export function updateImportPreviewAccount(db: Mon22rDb, userId: string, id: str
   return { ...existing, accountId };
 }
 
+/** Previews that were never committed. They hold parsed statement lines, so they should not linger. */
+export function pruneImportPreviews(db: Mon22rDb, olderThan: Date): number {
+  return db.orm.delete(importPreviews).where(lt(importPreviews.createdAt, olderThan.toISOString())).run().changes;
+}
+
 export function removeImportPreview(db: Mon22rDb, userId: string, id: string): void {
   const owner = assertUserId(userId);
-  db.orm.delete(importPreviews).where(and(eq(importPreviews.userId, owner), eq(importPreviews.id, id))).run();
+  db.orm
+    .delete(importPreviews)
+    .where(and(eq(importPreviews.userId, owner), eq(importPreviews.id, id)))
+    .run();
 }
 
 function rebuildTransaction(existing: Transaction, accountId: string, categoryId: string | null): Transaction {

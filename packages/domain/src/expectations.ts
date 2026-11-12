@@ -1,6 +1,6 @@
 import { assertUserId, LedgerError } from "./errors.js";
 import { assertCurrency, assertPositiveMinor, type CurrencyCode } from "./money.js";
-import { assertCalendarMonth, clampDayOfMonth, type CalendarMonth } from "./month.js";
+import { assertCalendarMonth, type CalendarMonth, clampDayOfMonth } from "./month.js";
 
 export const EXPECTATION_STATUSES = ["expected", "received", "partial", "skipped"] as const;
 export const PLAN_RECURRENCES = ["monthly", "once"] as const;
@@ -98,11 +98,7 @@ export function createIncomePlan(input: {
  * Returns null when the plan is inactive or does not apply to that month.
  * This does not create a transaction.
  */
-export function expectationFromPlan(
-  plan: IncomePlan,
-  month: CalendarMonth,
-  id: string,
-): IncomeExpectation | null {
+export function expectationFromPlan(plan: IncomePlan, month: CalendarMonth, id: string): IncomeExpectation | null {
   if (!plan.active) return null;
   const target = assertCalendarMonth(month);
   const startIndex = plan.startYear * 12 + plan.startMonth;
@@ -188,11 +184,7 @@ export function matchInflowToExpectation(
     if (expectation.status !== "expected" && expectation.status !== "partial") continue;
     const remaining = expectation.expectedMinor - expectation.receivedMinor;
     if (remaining <= 0) continue;
-    if (
-      expectation.accountId !== null &&
-      inflow.accountId !== null &&
-      expectation.accountId !== inflow.accountId
-    ) {
+    if (expectation.accountId !== null && inflow.accountId !== null && expectation.accountId !== inflow.accountId) {
       continue;
     }
     const diff = Math.abs(amountMinor - remaining);

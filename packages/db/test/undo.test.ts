@@ -1,22 +1,26 @@
-import { afterEach, describe, expect, it } from "vitest";
-
 import {
   createAccount,
+  createIncomeExpectation,
   createUser,
   deleteLatestTransaction,
   deleteTransaction,
+  findStatementProfileByFingerprint,
   findTransactionByImportKey,
+  getIncomeExpectation,
   listTransactions,
+  type Mon22rDb,
+  matchInflowAndSave,
   migrate,
   openDatabase,
   readUserFlags,
   recordTransaction,
   recordTransfer,
   saveStatementProfile,
-  findStatementProfileByFingerprint,
+  updateAccount,
   updateStoredUser,
-  type Mon22rDb,
 } from "@mon22r/db";
+import { LedgerError } from "@mon22r/domain";
+import { afterEach, describe, expect, it } from "vitest";
 
 const open: Mon22rDb[] = [];
 
@@ -78,7 +82,10 @@ describe("undo", () => {
     expect(deleteTransaction(db, other.id, "coffee")).toEqual([]);
     expect(listTransactions(db, user.id)).toHaveLength(1);
 
-    const removed = deleteLatestTransaction(db, user.id);
+    // An imported statement line is not "the last thing I typed": undo leaves it alone.
+    expect(deleteLatestTransaction(db, user.id)).toEqual([]);
+    expect(listTransactions(db, user.id)).toHaveLength(1);
+    const removed = deleteTransaction(db, user.id, "coffee");
     expect(removed.map((transaction) => transaction.id)).toEqual(["coffee"]);
     expect(findTransactionByImportKey(db, user.id, "sample", "coffee-1")).toBeNull();
     expect(listTransactions(db, user.id)).toEqual([]);
@@ -115,10 +122,14 @@ describe("undo", () => {
     const db = database();
     const user = createUser(db, { id: "user-a", telegramId: 1, homeCurrency: "RSD" });
     const other = createUser(db, { id: "user-b", telegramId: 2, homeCurrency: "EUR" });
-    updateStoredUser(db, user.id, { onboardingStep: "accounts", pendingCsvJson: '{"fingerprint":"a|b","headers":["A","B"]}' });
+    updateStoredUser(db, user.id, {
+      onboardingStep: "accounts",
+      pendingCsvJson: '{"fingerprint":"a|b","headers":["A","B"]}',
+    });
     expect(readUserFlags(db, user.id)).toEqual({
       onboardingStep: "accounts",
       pendingCsvJson: '{"fingerprint":"a|b","headers":["A","B"]}',
+      defaultAccountId: null,
     });
     updateStoredUser(db, user.id, { onboardingStep: null, timeZone: "Europe/London" });
     expect(readUserFlags(db, user.id)?.onboardingStep).toBeNull();
@@ -138,5 +149,53 @@ describe("undo", () => {
       mappingJson: '{"date":"Date","amount":"Sum","description":"Details"}',
     });
     expect(findStatementProfileByFingerprint(db, other.id, "date|amount")).toBeNull();
+  });
+
+  it("reopens an income line when the transaction that closed it is removed", () => {
+    const db = database();
+    const user = createUser(db, { id: "user-a", homeCurrency: "RSD" });
+    const card = createAccount(db, user.id, { id: "card", name: "Поштанска", currency: "RSD" });
+    const expectation = createIncomeExpectation(db, user.id, {
+      id: "salary-nov",
+      year: 2026,
+      month: 11,
+      name: "зп",
+      expectedMinor: 18_000_000,
+      currency: "RSD",
+      accountId: card.id,
+      dayOfMonth: 5,
+    });
+    const income = recordTransaction(db, user.id, {
+      id: "salary",
+      accountId: card.id,
+      kind: "income",
+      amountMinor: 18_000_000,
+      currency: "RSD",
+      occurredAt: "2026-11-05T09:00:00.000Z",
+    }).transaction;
+    expect(matchInflowAndSave(db, user.id, income.id)).toMatchObject({ status: "received", receivedMinor: 18_000_000 });
+
+    deleteTransaction(db, user.id, income.id);
+    expect(getIncomeExpectation(db, user.id, expectation.id)).toMatchObject({
+      status: "expected",
+      receivedMinor: 0,
+      matchedTransactionId: null,
+    });
+  });
+
+  it("keeps the default account valid: owned, active, and cleared when archived", () => {
+    const db = database();
+    const user = createUser(db, { id: "user-a", homeCurrency: "EUR" });
+    const other = createUser(db, { id: "user-b", homeCurrency: "EUR" });
+    const card = createAccount(db, user.id, { id: "card", name: "Поштанска", currency: "RSD" });
+    const foreign = createAccount(db, other.id, { id: "foreign", name: "Other", currency: "RSD" });
+
+    expect(() => updateStoredUser(db, user.id, { defaultAccountId: foreign.id })).toThrow(LedgerError);
+    updateStoredUser(db, user.id, { defaultAccountId: card.id });
+    expect(readUserFlags(db, user.id)?.defaultAccountId).toBe(card.id);
+
+    updateAccount(db, user.id, card.id, { archived: true });
+    expect(readUserFlags(db, user.id)?.defaultAccountId).toBeNull();
+    expect(() => updateStoredUser(db, user.id, { defaultAccountId: card.id })).toThrow(LedgerError);
   });
 });

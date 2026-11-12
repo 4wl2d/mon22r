@@ -179,10 +179,7 @@ export type AppendTransactionResult = {
  * Append a transaction unless the same user already has this statement identity.
  * Manual transactions have a null import identity and are never collapsed.
  */
-export function appendTransaction(
-  existing: readonly Transaction[],
-  transaction: Transaction,
-): AppendTransactionResult {
+export function appendTransaction(existing: readonly Transaction[], transaction: Transaction): AppendTransactionResult {
   const duplicate = findImportedDuplicate(existing, transaction);
   if (duplicate) {
     return { status: "duplicate", transactions: existing, transaction: duplicate };

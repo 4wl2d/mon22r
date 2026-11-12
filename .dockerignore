@@ -1,22 +1,28 @@
 .git
+.github
 .codegraph
 node_modules
 **/node_modules
 **/dist
-data
-**/*.sqlite
-**/*.sqlite-*
-.env
+**/test
+**/scripts
+**/*.tsbuildinfo
 coverage
+docs
+deploy
+data
 .DS_Store
 
 # Never send credentials or local finance data to the builder
+.env
 .env.*
 !.env.example
 backups
 imports
 exports
 statements
+**/*.sqlite
+**/*.sqlite-*
 **/*.db
 **/*.db-*
 **/*.pem

@@ -1,85 +1,100 @@
 # Architecture
 
-A TypeScript pnpm workspace with a Telegram bot and a React Mini App sharing one ledger. The production runtime is one Node process plus SQLite; the supplied Compose deployment places Caddy in front of it.
+A TypeScript pnpm workspace: a Telegram bot and a React Mini App sharing one ledger. In production it is one Node process and one SQLite file, with Caddy in front for HTTPS.
 
-## Actual roots
+## Where things are
 
-| Root | Responsibility |
+| Path | Responsibility |
 | --- | --- |
-| `apps/server/src` | Environment parsing, grammY bot, text capture, onboarding, Hono routes, Telegram authentication, month views, plans, and import orchestration. |
-| `apps/miniapp/src` | React screens for setup, month, next-month plans, feed, and accounts; API client and Telegram viewport/launch integration. |
-| `packages/domain/src` | Money parsing, transaction invariants, calendar/time-zone calculations, totals, income expectations, FX estimation, and a future bank-adapter interface. |
-| `packages/db/src` | SQLite connection, Drizzle schema, versioned SQL migrations, and user-scoped repository operations. |
-| `packages/importers/src` | CSV parsing and mappings, header fingerprints, preview classification, and statement-line commit logic. |
-| `apps/server/test`, `packages/*/test` | Vitest tests for auth, capture, contracts, ledger operations, money/month semantics, imports, and undo. |
-| `Dockerfile`, `docker-compose.yml`, `Caddyfile` | Build and manual deployment configuration. |
+| `apps/server/src/main.ts`, `service.ts` | Process entry and lifecycle: start, signals, fatal exits; database, HTTP, bot, and jobs wired together. |
+| `apps/server/src/bot.ts`, `capture.ts`, `phrases.ts`, `entry-view.ts` | Chat handlers, applying a line to the ledger, the phrase grammar, and the confirmation with its buttons. |
+| `apps/server/src/http.ts`, `auth.ts`, `month-view.ts` | Mini App API, launch-data check, and the month summary both the API and `/month` use. |
+| `apps/server/src/jobs.ts`, `backup.ts`, `fx.ts`, `notify.ts`, `health.ts` | Scheduled work, backup and restore, reference rates, owner alerts, liveness. |
+| `apps/server/src/tools.ts`, `healthcheck.ts` | Operations commands and the container health probe. |
+| `apps/miniapp/src` | Screens (month, feed, settings, setup), the API client with response validation, a small read cache, Telegram integration. |
+| `packages/domain/src` | Money parsing, transaction rules, calendar months in a time zone, totals, income expectations, FX estimates. |
+| `packages/db/src` | SQLite connection, schema, migrations, repository functions scoped to a user, backup primitives. |
+| `packages/importers/src` | CSV parsing, column mapping, preview classification, statement-line commit. |
+| `deploy/` | Production stack, proxy configuration, release scripts, the pipeline's stand-in Bot API. |
 
-The Mini App uses React 19, Vite, and the Telegram Mini Apps SDK. The bot uses grammY, HTTP uses Hono, and persistence uses Drizzle with `better-sqlite3`. UI fonts are Fraunces and IBM Plex Sans.
-
-## Runtime paths
+## Runtime
 
 ```text
-Telegram chat -> grammY allowlist -> onboarding / phrase capture / CSV upload
-                                      |
-Telegram Mini App -> HTTPS -> Hono /api/* -> signed init data + allowlist
-                                      |
-                         user-scoped repository operations
-                                      |
-                        domain rules + SQLite / Drizzle
+Telegram chat ── long polling ──> grammY ── allowlist ──> onboarding / capture / CSV import
+                                                              │
+Telegram Mini App ── HTTPS ──> Caddy ──> Hono /api/* ── signed launch data + allowlist
+                                                              │
+                                              repository functions, scoped to the user
+                                                              │
+                                                  domain rules + SQLite (WAL)
 ```
 
-`apps/server/src/main.ts` reads configuration, creates the database directory, opens SQLite, and applies pending migrations. It starts Hono on `0.0.0.0`, configures the bot's web-app menu, and invokes `bot.start()` for long polling. Run a single polling instance per bot token.
+One process does everything, so there is no coordination to get wrong: updates are handled one at a time and SQLite calls are synchronous. Because one slow Bot API call would hold up every update behind it, calls have a 50-second limit and are retried at most twice, a few seconds apart.
 
-The same HTTP application serves the built `apps/miniapp/dist` directory. Non-API GET routes fall back to its `index.html`; API misses return JSON 404s. The asset location defaults to the repository root's working directory. In Compose, Caddy terminates HTTPS and forwards to `app:3000`.
+**Start.** Read settings, open the database, apply pending migrations, start HTTP, set the bot's menu button and commands, start polling, start the job timer.
 
-## Access boundary
+**Stop.** On SIGTERM the process stops the jobs, stops the bot (which confirms the handled updates with Telegram), closes HTTP, checkpoints the write-ahead log into the main file, and exits 0. A stop that takes longer than eight seconds exits non-zero.
 
-- The bot middleware checks the sender's numeric Telegram ID against the configured allowlist before handling input.
-- `/api/*` requires an `Authorization: tma ...` header. `@tma.js/init-data-node` validates the Telegram signature using the bot token and checks launch data against a 24-hour expiry.
-- A valid launch signature still requires an allowed user ID. Missing allowlist configuration fails startup; an empty allowlist grants no access.
-- Repository reads and writes are scoped to the internal user ID; ownership and account currency are checked on posting operations.
-- Static interface assets are public. Ledger API access is authenticated separately.
+**Failure.** Fatal conditions — polling refused or ended, an uncaught error, a poll loop silent for three minutes — are logged, reported to the owner at most once per half hour, and end the process with a non-zero code. Docker's restart policy starts it again. A flag in the database tells the next start that the previous run did not stop cleanly, and the owner is told.
 
-These describe implemented controls. They do not constitute a security audit or a guarantee about hosting. Telegram remains part of the message/document transport, and application database encryption is not configured.
+## Access
+
+- The bot checks the sender's numeric ID against the allowlist before anything else and ignores group chats.
+- `/api/*` requires `Authorization: tma <launch data>`. The signature is checked with the bot token, launch data older than 24 hours is refused, and the user must be on the allowlist.
+- Every repository function takes the internal user ID and filters by it. Tests exercise one user's requests against another user's rows.
+- Request bodies are limited to 256 KB and validated field by field. Currency codes must be ISO 4217 codes the runtime knows.
+- Responses carry a content security policy that allows only this origin's scripts and framing by Telegram's web clients, plus `nosniff`, HSTS, and `no-referrer`. API answers are `no-store`; hashed assets are cached for a year; the page itself is revalidated.
+- `/healthz` is public and reveals only liveness, the version, and the time of the last backup.
+
+These are implemented and tested controls, not an audit.
 
 ## Ledger rules
 
-Money is stored as a safe integer count of currency minor units. Posting amounts are positive magnitudes, with direction and kind describing movement. Currency codes are three uppercase letters; exponent rules cover selected zero- and three-decimal currencies and default to two decimals.
+Money is an integer count of minor units with a currency code. Amounts are positive; direction and kind carry the meaning.
 
-- Transactions represent expense, income, refund, or transfer.
-- Transfers are two linked rows written in a database transaction. Their legs are excluded from income, expense, and category-spending totals.
-- Refunds reduce expense totals and, when categorized, that category's spending.
-- Totals remain grouped by currency. Monthly boundaries are calculated in the user's configured time zone, then used as UTC instants for queries.
-- Home-currency estimates use stored rational FX rates without changing original transactions. Missing or invalid rates suppress the estimate. No automatic FX feed or rate-management UI is implemented.
+- Kinds: expense, income, refund, transfer. A transfer is two linked rows written in one database transaction and counted in neither income nor spending. A refund lowers spending in its category.
+- Totals are kept per currency. Month boundaries are computed in the user's time zone and queried as UTC instants.
+- The home-currency figure is an estimate from the latest stored rate of each pair. It is labeled as one, and stored amounts are never rewritten. With a rate missing, the estimate is omitted.
+- Removing a transaction that had closed an income line reopens that line by the removed amount.
 
-The domain includes a future bank-adapter port in `bank.ts`. It has no implemented bank connector, consent flow, or automatic synchronization in this runtime.
+## Capture
 
-## Plans and capture
+The grammar is deterministic and Russian. One line becomes an expense, income (`+`), refund (`возврат`), transfer (`перевод`), or plan (`план`), with an optional leading day (`вчера`, `5.11`) and an optional `#category`.
 
-Onboarding stores a home currency, time zone, and starter-account choice. Progress is persisted so it can resume after restart.
+- **Which account.** An amount without a currency goes to the default account, in its currency; without a default, to the home currency. For a currency, the choice is: the default account if it holds that currency, else the account of the last hand-entered line of that currency, else the oldest active one. The confirmation offers the other accounts of that currency as buttons.
+- **Which category.** A tag wins and creates the category if needed. Otherwise the category last used for the same note applies; the note key is stored on each row and indexed, so this is one lookup regardless of history size.
+- **Transfers.** Accounts are named by any part of their name; several matches are narrowed by currency or reported back. Between currencies the arrived amount is required, because guessing a rate would put a wrong number in the ledger.
+- **Exactly once.** The ledger write and a record of the Telegram update ID share one SQLite transaction. An update delivered again after a restart is answered with "already recorded" and writes nothing.
+- **Undo.** `/undo` and the button remove the entry (both legs of a transfer) and say what was removed. `/undo` skips imported lines.
 
-The chat parser is deterministic and primarily Russian. It recognizes expenses, income, transfers, relative dates, and next-month plans. Category reuse is based on matching previously categorized descriptions. It does not call an AI service.
+Income plans are monthly templates. Each month they apply to gets its own line with a status: expected, received, partial, skipped. An income entry of a similar amount offers to close the matching line; nothing is closed without a tap. A line remembers only the last entry that was matched to it, so when a line was filled by several partial entries, removing an earlier one does not reopen it; set its status by hand in that case.
 
-Income plans are monthly or one-off templates. Applicable plans materialize month-specific expectations, with expected, received, partial, and skipped states. Incoming records can offer an expectation match. The Mini App shows next-month planning and supports status/amount updates. A stored reminder preference has no scheduled delivery worker.
-
-Undo deletes the latest ledger movement, including both linked transfer legs. The feed supports corrections to transaction accounts and categories.
-
-## CSV flow
+## CSV import
 
 ```text
-Upload -> parse headers -> saved mapping or request a mapping
-       -> preview new / duplicate / skipped rows
-       -> choose a matching-currency account -> explicit commit
+file → header → saved column profile, or ask for one
+     → preview: new / duplicate / skipped
+     → account of the file's currency → confirm → commit
 ```
 
-Column profiles are keyed by user and header fingerprint. Previews classify opening/closing balances, cashback points, and unparseable lines as skipped. Duplicate checks use the user, import source, and external key; a database uniqueness constraint protects the same identity at commit time.
+Profiles are keyed by the header. Duplicates are recognized by user, profile, and the line's external key, and a unique index enforces that at commit. Commit runs in one transaction and removes the stored preview; previews never committed are deleted after a week. The uploaded file itself is not stored.
 
-A preview must contain a single currency and target an active matching-currency account. Commit runs transactionally and removes the stored preview. Original CSV file bytes are not stored in SQLite; parsed preview data, profiles, and pending header metadata are persisted.
+## Storage and migrations
 
-## Storage and development
+SQLite with foreign keys, a five-second busy timeout, and WAL. `schema_migrations` lists applied migrations; pending ones are applied in one transaction at start.
 
-SQLite enables foreign keys, a 5-second busy timeout, and WAL for file-backed databases. Schema versions are tracked in `schema_migrations`; startup applies pending versioned SQL inside a transaction. The schema covers users, accounts, categories, transactions, plans, expectations, FX rates, import identities, column profiles, and import previews.
+Migrations are append-only and, by default, **additive**: the previous release must keep working on the new schema, so a release can be rolled back without touching data. A migration that breaks that sets `breaksOlderReleases`; the database then stores a compatibility floor in `PRAGMA user_version`, and a build that knows fewer migrations than the floor refuses to start. Tests cover an in-place upgrade from the first release's schema, writes made the way the previous release makes them, and the refusal.
 
-Build dependencies flow from the server's TypeScript project references to the domain, database, and importer packages. Root scripts run TypeScript checks and Vitest; the Mini App build separately typechecks and bundles with Vite. See [setup](SETUP.md) for exact commands, manual deployment, and WAL-aware backup guidance.
+Backups use SQLite's online backup API, are converted to a single file, checked with `PRAGMA integrity_check`, and gzip-compressed. See [operations](OPERATIONS.md#backups).
 
-[Back to README](../README.md)
+## Mini App
+
+React 19 with Vite. The Telegram SDK supplies launch data, viewport insets as CSS variables, haptics, and external links; nothing is loaded from other origins. The API client validates every answer before use, gives each call a time limit, and retries a failed read once but never a write.
+
+Reads go through a small in-memory cache keyed by month: a screen shows cached data at once and refreshes in the background, and returning from the chat refreshes what is on screen. Opening the app costs two requests; the feed costs one.
+
+## Delivery
+
+The pipeline, the release procedure, rollback, and recovery are described in [operations](OPERATIONS.md). In short: the image that passed the tests, the self-check, and a real boot is the file that reaches the server, identified by its SHA-256 and its commit label, and it becomes current only after it reports healthy as that commit.
+
+[Back to README](../README.md) · [Setup](SETUP.md) · [Operations](OPERATIONS.md)

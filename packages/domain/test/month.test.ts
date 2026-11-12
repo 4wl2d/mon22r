@@ -1,11 +1,5 @@
+import { DEFAULT_TIME_ZONE, monthContaining, monthRange, transactionFromStatementLine } from "@mon22r/domain";
 import { describe, expect, it } from "vitest";
-
-import {
-  DEFAULT_TIME_ZONE,
-  monthContaining,
-  monthRange,
-  transactionFromStatementLine,
-} from "@mon22r/domain";
 
 const belgrade = "Europe/Belgrade";
 

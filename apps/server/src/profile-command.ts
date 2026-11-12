@@ -1,4 +1,4 @@
-import { parseMapping, type CsvMapping } from "@mon22r/importers";
+import { type CsvMapping, parseMapping } from "@mon22r/importers";
 
 export function parseProfileCommand(text: string): { readonly name: string; readonly mapping: CsvMapping } | null {
   const match = /^профиль\s+([^|]+?)\s*\|\s*(.+)$/iu.exec(text.trim());
@@ -17,7 +17,11 @@ export function parseProfileCommand(text: string): { readonly name: string; read
   if (fields.currencyColumn !== undefined) {
     fields.currency = fields.currencyColumn;
     delete fields.currencyColumn;
-  } else if (fields.currency !== undefined && /^[A-Za-z]{3}$/.test(fields.currency) && fields.fixedCurrency === undefined) {
+  } else if (
+    fields.currency !== undefined &&
+    /^[A-Za-z]{3}$/.test(fields.currency) &&
+    fields.fixedCurrency === undefined
+  ) {
     fields.fixedCurrency = fields.currency.toUpperCase();
     delete fields.currency;
   }

@@ -3,25 +3,26 @@ import {
   findTransactionByImportKey,
   insertImportPreview,
   listAccounts,
+  type Mon22rDb,
   readImportPreview,
   readUserFlags,
   recordTransaction,
+  rememberedCategoryId,
   removeImportPreview,
   saveStatementProfile,
   updateImportPreviewAccount,
   updateStoredUser,
-  type Mon22rDb,
 } from "@mon22r/db";
-import { LedgerError, type Account, type PulledStatementLine, type Transaction, type User } from "@mon22r/domain";
+import { type Account, LedgerError, type PulledStatementLine, type Transaction, type User } from "@mon22r/domain";
 import {
   commitStatementLines,
   headerFingerprint,
   headersCover,
+  type PreviewCounts,
+  type PreviewRow,
   parseCsvTable,
   parseMapping,
   previewCsv,
-  type PreviewCounts,
-  type PreviewRow,
 } from "@mon22r/importers";
 
 import { parseProfileCommand } from "./profile-command.js";
@@ -42,7 +43,12 @@ export type UploadResult =
       readonly accountCurrency: string;
       readonly fileCurrency: string;
     }
-  | { readonly type: "counts"; readonly counts: PreviewCounts; readonly source: string; readonly rows: readonly PreviewRow[] }
+  | {
+      readonly type: "counts";
+      readonly counts: PreviewCounts;
+      readonly source: string;
+      readonly rows: readonly PreviewRow[];
+    }
   | {
       readonly type: "choose_account";
       readonly previewId: string;
@@ -74,7 +80,8 @@ export function previewUpload(
     throw new LedgerError("invalid_posting", "Column mapping is invalid");
   }
   if (mapping !== null) {
-    if (!headersCover(table.headers, mapping)) throw new LedgerError("invalid_posting", "Column mapping does not match the header");
+    if (!headersCover(table.headers, mapping))
+      throw new LedgerError("invalid_posting", "Column mapping does not match the header");
     const name = profile?.name ?? options?.profileName?.trim();
     if (name === undefined || name.length === 0) throw new LedgerError("invalid_posting", "Profile name is required");
     profile = saveStatementProfile(db, user.id, { name, fingerprint, mappingJson: JSON.stringify(mapping) });
@@ -99,7 +106,9 @@ export function previewUpload(
   const currencies = uniqueCurrencies(lines);
   const fileCurrency = currencies[0];
   if (fileCurrency === undefined || currencies.length !== 1) return { type: "mixed_currency" };
-  const accounts = listAccounts(db, user.id).filter((account) => !account.archived && account.currency === fileCurrency);
+  const accounts = listAccounts(db, user.id).filter(
+    (account) => !account.archived && account.currency === fileCurrency,
+  );
   if (options?.accountId !== undefined) {
     const account = accounts.find((item) => item.id === options.accountId) ?? null;
     if (account === null) {
@@ -112,7 +121,14 @@ export function previewUpload(
       accountId: account.id,
       linesJson: encodePreview(lines, preview.counts.skipped),
     });
-    return { type: "ready", previewId: stored.id, account, counts: preview.counts, source: profile.name, rows: preview.rows };
+    return {
+      type: "ready",
+      previewId: stored.id,
+      account,
+      counts: preview.counts,
+      source: profile.name,
+      rows: preview.rows,
+    };
   }
   if (accounts.length === 0) return { type: "no_account", currency: fileCurrency };
   if (accounts.length > 1) {
@@ -130,7 +146,14 @@ export function previewUpload(
     accountId: account.id,
     linesJson: encodePreview(lines, preview.counts.skipped),
   });
-  return { type: "ready", previewId: stored.id, account, counts: preview.counts, source: profile.name, rows: preview.rows };
+  return {
+    type: "ready",
+    previewId: stored.id,
+    account,
+    counts: preview.counts,
+    source: profile.name,
+    rows: preview.rows,
+  };
 }
 
 export function commitStoredPreview(
@@ -149,7 +172,9 @@ export function commitStoredPreview(
       source: preview.source,
       timeZone: user.timeZone,
       lines,
-      record: (row) => recordTransaction(db, user.id, row),
+      // A line whose description was categorized before gets the same category, like a chat entry.
+      record: (row) =>
+        recordTransaction(db, user.id, { ...row, categoryId: rememberedCategoryId(db, user.id, row.description) }),
     });
     removeImportPreview(db, user.id, preview.id);
     return result;
@@ -166,7 +191,8 @@ export function assignPreviewAccount(db: Mon22rDb, user: User, previewId: string
   const fileCurrency = currencies[0];
   if (fileCurrency === undefined || currencies.length !== 1) return { type: "mixed_currency" };
   const account = listAccounts(db, user.id).find((item) => item.id === accountId) ?? null;
-  if (account === null || account.archived) throw new LedgerError("account_not_found", "Account was not found for this user");
+  if (account === null || account.archived)
+    throw new LedgerError("account_not_found", "Account was not found for this user");
   if (account.currency !== fileCurrency) {
     return { type: "currency_mismatch", accountName: account.name, accountCurrency: account.currency, fileCurrency };
   }
@@ -244,7 +270,8 @@ function encodePreview(lines: readonly PulledStatementLine[], skipped: number): 
 function decodePreview(json: string): { readonly lines: PulledStatementLine[]; readonly skipped: number } {
   const parsed = readJson(json);
   if (Array.isArray(parsed)) return { lines: parseStoredLines(parsed), skipped: 0 };
-  if (!isRecord(parsed) || !Array.isArray(parsed.lines)) throw new LedgerError("invalid_posting", "Import preview is invalid");
+  if (!isRecord(parsed) || !Array.isArray(parsed.lines))
+    throw new LedgerError("invalid_posting", "Import preview is invalid");
   const skipped = typeof parsed.skipped === "number" && Number.isSafeInteger(parsed.skipped) ? parsed.skipped : 0;
   return { lines: parseStoredLines(parsed.lines), skipped };
 }
@@ -252,7 +279,8 @@ function decodePreview(json: string): { readonly lines: PulledStatementLine[]; r
 function parseStoredLines(parsed: unknown[]): PulledStatementLine[] {
   const lines: PulledStatementLine[] = [];
   for (const item of parsed) {
-    if (typeof item !== "object" || item === null) throw new LedgerError("invalid_posting", "Import preview is invalid");
+    if (typeof item !== "object" || item === null)
+      throw new LedgerError("invalid_posting", "Import preview is invalid");
     const line = item as Partial<PulledStatementLine>;
     if (
       typeof line.externalKey !== "string" ||

@@ -1,5 +1,5 @@
 import type { CurrencyCode } from "./money.js";
-import { monthRange, type CalendarMonth } from "./month.js";
+import { type CalendarMonth, monthRange } from "./month.js";
 import type { Transaction } from "./transactions.js";
 
 export type CurrencyTotals = {

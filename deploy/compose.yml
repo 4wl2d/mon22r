@@ -1,0 +1,71 @@
+# Production stack: the application and Caddy in front of it.
+# Run it through /opt/mon22r/bin/compose, which supplies MON22R_IMAGE from the current release.
+name: mon22r
+
+services:
+  app:
+    image: ${MON22R_IMAGE:?MON22R_IMAGE is not set. Use /opt/mon22r/bin/compose instead of calling docker compose directly}
+    pull_policy: never
+    restart: unless-stopped
+    init: true
+    env_file:
+      - .env
+    environment:
+      DATABASE_PATH: /data/mon22r.sqlite
+      BACKUP_DIR: /backups
+      PORT: "3000"
+    volumes:
+      - sqlite:/data
+      - ./backups:/backups
+    expose:
+      - "3000"
+    # The process handles SIGTERM itself: it confirms updates with Telegram and checkpoints the database.
+    stop_grace_period: 15s
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      # Works for every release, including ones that predate the image's own probe.
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3000/healthz').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    logging: &logging
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  caddy:
+    image: caddy:2.11.9-alpine@sha256:0bbb055bda6793c999bde78b1b5ce3e89f829fb031af2cf50056ea1246559fee
+    restart: unless-stopped
+    depends_on:
+      - app
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      DOMAIN: ${DOMAIN:?DOMAIN is not set in .env}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    security_opt:
+      - no-new-privileges:true
+    logging: *logging
+
+volumes:
+  sqlite:
+  caddy-data:
+  caddy-config:

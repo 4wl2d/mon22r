@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-import { transactionFromStatementLine, type PulledStatementLine, type Transaction } from "@mon22r/domain";
+import { type PulledStatementLine, type Transaction, transactionFromStatementLine } from "@mon22r/domain";
 
 export type CommitRecordInput = {
   readonly id: string;
@@ -32,7 +32,10 @@ export function commitStatementLines(input: {
   readonly timeZone: string;
   readonly lines: readonly PulledStatementLine[];
   readonly now?: Date;
-  readonly record: (row: CommitRecordInput) => { readonly status: "created" | "duplicate"; readonly transaction: Transaction };
+  readonly record: (row: CommitRecordInput) => {
+    readonly status: "created" | "duplicate";
+    readonly transaction: Transaction;
+  };
 }): CommitResult {
   const createdAt = (input.now ?? new Date()).toISOString();
   let created = 0;

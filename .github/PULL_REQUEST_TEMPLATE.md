@@ -1,17 +1,15 @@
 ## What changed
 
-<!-- Explain the behavior change and why it is needed. Link the issue, if any. -->
+<!-- The behavior change and why it is needed. Link the issue, if any. -->
 
-## Validation
+## How it was checked
 
-- [ ] `pnpm typecheck`
-- [ ] `pnpm test`
-- [ ] Server and Mini App builds pass
-- [ ] Regression tests or an explanation of why they are unnecessary
-- [ ] Docs updated where behavior or setup changed
-- [ ] Examples, screenshots and fixtures contain only synthetic data
-- [ ] No credentials, databases, bank statements or Telegram init data
+- [ ] `pnpm verify` passes
+- [ ] A regression test covers the change, or it is explained why none is needed
+- [ ] Docs updated where setup, operation, or behavior changed
+- [ ] Examples, screenshots, and fixtures use made-up data only
+- [ ] No credentials, databases, statements, launch data, or server addresses
 
-## Notes
+## Release notes
 
-<!-- Mention compatibility, data migration or manual deployment implications. No production secrets. -->
+<!-- Merging releases to production. Say so if this adds a migration; if the migration is not additive, say that rolling back means restoring the pre-deploy backup. -->

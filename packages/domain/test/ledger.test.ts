@@ -1,7 +1,6 @@
-import { describe, expect, it } from "vitest";
-
 import {
   appendTransaction,
+  type BankConnector,
   createIncomePlan,
   createTransaction,
   createTransfer,
@@ -11,11 +10,11 @@ import {
   matchInflowToExpectation,
   monthTotals,
   spendByCategory,
+  type Transaction,
   totalsByCurrency,
   transactionFromStatementLine,
-  type BankConnector,
-  type Transaction,
 } from "@mon22r/domain";
+import { describe, expect, it } from "vitest";
 
 const userId = "user";
 const belgrade = "Europe/Belgrade";
@@ -88,12 +87,8 @@ describe("transfers, refunds, and currencies", () => {
       description: "refund",
     });
     expect(refund.direction).toBe("inflow");
-    expect(spendByCategory([spent, refund])).toEqual([
-      { categoryId: "food", currency: "RSD", spentMinor: 80_000 },
-    ]);
-    expect(totalsByCurrency([spent, refund])).toEqual([
-      { currency: "RSD", incomeMinor: 0, expenseMinor: 80_000 },
-    ]);
+    expect(spendByCategory([spent, refund])).toEqual([{ categoryId: "food", currency: "RSD", spentMinor: 80_000 }]);
+    expect(totalsByCurrency([spent, refund])).toEqual([{ currency: "RSD", incomeMinor: 0, expenseMinor: 80_000 }]);
   });
 
   it("keeps currencies apart and drops activity outside the Belgrade month", () => {
@@ -154,7 +149,8 @@ describe("income expectations", () => {
       description: "зп",
     });
     transactions.push(inflow);
-    const frozen = Object.freeze({ ...novemberExpectation! });
+    if (novemberExpectation === null) throw new Error("the plan applies to November");
+    const frozen = Object.freeze({ ...novemberExpectation });
     const match = matchInflowToExpectation([frozen], {
       id: inflow.id,
       userId: inflow.userId,
@@ -189,14 +185,15 @@ describe("income expectations", () => {
       "exp",
     );
     expect(expectation).not.toBeNull();
-    const partial = matchInflowToExpectation([expectation!], {
+    if (expectation === null) throw new Error("the plan applies to this month");
+    const partial = matchInflowToExpectation([expectation], {
       id: "pay-short",
       userId,
       amountMinor: 90_000,
       currency: "RSD",
       accountId: "card",
     });
-    const unrelated = matchInflowToExpectation([expectation!], {
+    const unrelated = matchInflowToExpectation([expectation], {
       id: "pay-other",
       userId,
       amountMinor: 50_000,
@@ -206,21 +203,23 @@ describe("income expectations", () => {
     expect(partial?.status).toBe("partial");
     expect(partial?.expectation.receivedMinor).toBe(90_000);
     expect(unrelated).toBeNull();
-    expect(expectationFromPlan(
-      createIncomePlan({
-        id: "once",
-        userId,
-        name: "bonus",
-        amountMinor: 100,
-        currency: "RSD",
-        dayOfMonth: 1,
-        recurrence: "once",
-        startYear: 2026,
-        startMonth: 11,
-      }),
-      { year: 2026, month: 12 },
-      "later",
-    )).toBeNull();
+    expect(
+      expectationFromPlan(
+        createIncomePlan({
+          id: "once",
+          userId,
+          name: "bonus",
+          amountMinor: 100,
+          currency: "RSD",
+          dayOfMonth: 1,
+          recurrence: "once",
+          startYear: 2026,
+          startMonth: 11,
+        }),
+        { year: 2026, month: 12 },
+        "later",
+      ),
+    ).toBeNull();
   });
 });
 
@@ -277,9 +276,7 @@ describe("statement identity", () => {
 
 describe("home currency estimate", () => {
   it("returns an estimate and leaves the stored amount unchanged", () => {
-    const stored = Object.freeze(
-      expense({ id: "stored", amountMinor: 35_050, currency: "RSD" }),
-    );
+    const stored = Object.freeze(expense({ id: "stored", amountMinor: 35_050, currency: "RSD" }));
     const estimate = estimateInHomeCurrency({
       parts: [{ minor: stored.amountMinor, currency: stored.currency }],
       homeCurrency: "EUR",
