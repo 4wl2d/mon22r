@@ -1,0 +1,23 @@
+{
+  "name": "@mon22r/server",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc -b tsconfig.json --pretty false",
+    "start": "node dist/main.js",
+    "typecheck": "tsc -p tsconfig.json --pretty false"
+  },
+  "dependencies": {
+    "@hono/node-server": "^1.19.11",
+    "@mon22r/db": "workspace:*",
+    "@mon22r/domain": "workspace:*",
+    "@mon22r/importers": "workspace:*",
+    "@tma.js/init-data-node": "^2.0.8",
+    "grammy": "^1.46.0",
+    "hono": "^4.13.18"
+  },
+  "devDependencies": {
+    "@types/node": "^22.19.0"
+  }
+}

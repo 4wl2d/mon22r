@@ -1,0 +1,25 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "noImplicitReturns": true,
+    "forceConsistentCasingInFileNames": true,
+    "isolatedModules": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "noEmit": true,
+    "types": ["node"],
+    "paths": {
+      "@mon22r/domain": ["./packages/domain/src/index.ts"],
+      "@mon22r/db": ["./packages/db/src/index.ts"],
+      "@mon22r/importers": ["./packages/importers/src/index.ts"]
+    }
+  },
+  "include": ["packages/*/test/**/*.ts", "apps/server/test/**/*.ts", "apps/server/src/**/*.ts", "vitest.config.ts"]
+}

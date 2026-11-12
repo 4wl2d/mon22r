@@ -1,0 +1,11 @@
+.git
+.codegraph
+node_modules
+**/node_modules
+**/dist
+data
+**/*.sqlite
+**/*.sqlite-*
+.env
+coverage
+.DS_Store

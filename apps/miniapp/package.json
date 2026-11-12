@@ -1,0 +1,27 @@
+{
+  "name": "@mon22r/miniapp",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -p tsconfig.json --noEmit && vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@fontsource/fraunces": "^5.2.8",
+    "@fontsource/ibm-plex-sans": "^5.2.6",
+    "@mon22r/domain": "workspace:*",
+    "@tma.js/sdk": "^3.3.0",
+    "@tma.js/sdk-react": "^3.0.23",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.1.0",
+    "@types/react-dom": "^19.1.0",
+    "@vitejs/plugin-react": "^4.7.0",
+    "typescript": "^5.9.3",
+    "vite": "^6.3.5"
+  }
+}
