@@ -1,0 +1,79 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Validate (Node ${{ matrix.node }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [22, 24]
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Set up pnpm
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+        with:
+          run_install: false
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: pnpm
+      - name: Install locked dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Audit production dependencies
+        if: matrix.node == 22
+        run: pnpm audit --prod --audit-level=high
+      - name: Typecheck source and tests
+        run: pnpm typecheck
+      - name: Test synthetic and in-memory fixtures
+        run: pnpm test
+      - name: Build server
+        run: pnpm --filter @mon22r/server build
+      - name: Build Mini App
+        run: pnpm --filter @mon22r/miniapp build
+      - name: Upload Mini App preview bundle
+        if: matrix.node == 22
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: miniapp-preview
+          path: apps/miniapp/dist/
+          if-no-files-found: error
+          retention-days: 7
+
+  container:
+    name: Container
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Build the deployment image without publishing
+        run: docker build --tag mon22r:ci .
+      - name: Verify packaged entry points without starting the bot
+        run: |
+          docker run --rm --entrypoint sh mon22r:ci -c '
+            test -s apps/miniapp/dist/index.html &&
+            test -s apps/server/dist/main.js &&
+            node --check apps/server/dist/main.js
+          '
+          docker compose config --no-env-resolution --no-interpolate --quiet

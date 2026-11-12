@@ -9,3 +9,17 @@ data
 .env
 coverage
 .DS_Store
+
+# Never send credentials or local finance data to the builder
+.env.*
+!.env.example
+backups
+imports
+exports
+statements
+**/*.db
+**/*.db-*
+**/*.pem
+**/*.key
+**/*.p12
+**/*.pfx

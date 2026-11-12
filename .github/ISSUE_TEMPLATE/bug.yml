@@ -1,0 +1,40 @@
+name: Bug report
+description: Report a reproducible problem using synthetic data.
+title: "bug: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This issue is public. Do not include bot tokens, Telegram init data, real financial records, bank statements or private server details. Use private vulnerability reporting for security issues.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What happened?
+      description: Include expected behavior and actual behavior.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: Provide minimal steps with fabricated data.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Commit or version
+      placeholder: Commit SHA or tag
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: Node.js, OS, Docker and Telegram client versions where relevant.
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Sanitized logs or screenshots
+      description: Remove credentials, account details, private hostnames and personal transactions.

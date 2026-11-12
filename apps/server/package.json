@@ -9,7 +9,7 @@
     "typecheck": "tsc -p tsconfig.json --pretty false"
   },
   "dependencies": {
-    "@hono/node-server": "^1.19.11",
+    "@hono/node-server": "^2.1.7",
     "@mon22r/db": "workspace:*",
     "@mon22r/domain": "workspace:*",
     "@mon22r/importers": "workspace:*",

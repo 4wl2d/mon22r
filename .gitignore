@@ -22,3 +22,15 @@ pnpm-debug.log*
 *.iml
 *.swp
 *~
+
+# Local financial exports and deployment material
+/backups/
+/imports/
+/exports/
+/statements/
+*.db
+*.db-*
+*.pem
+*.key
+*.p12
+*.pfx
