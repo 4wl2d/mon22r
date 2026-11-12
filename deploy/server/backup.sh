@@ -5,6 +5,7 @@
 # shellcheck source=deploy/server/lib.sh
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
 
+lock
 current="$(release_name current)" || die "no current release"
 image="$(release_image "$current")"
 tool "$image" backup manual

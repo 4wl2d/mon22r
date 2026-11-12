@@ -3,7 +3,7 @@
 #
 #   deploy.sh <commit sha> <directory with image.tar.gz, image.sha256, compose.yml, Caddyfile and these scripts>
 #
-# Order: verify the image file -> load it -> back the database up -> switch -> wait for health.
+# Order: verify the image file -> load it -> stop the old app -> back the database up -> switch -> wait for health.
 # If the new release is not healthy in time, the previous release is started again and the script exits non-zero.
 # If the previous release cannot use the database any more (a migration raised the compatibility floor),
 # the backup taken in step three is restored first. The replaced database files are kept next to it.
@@ -44,17 +44,6 @@ install_scripts "$SOURCE_DIR"
 cp "$INCOMING/compose.yml" "$INCOMING/Caddyfile" "$ROOT/releases/$SHA/"
 printf '%s\n' "$IMAGE" >"$ROOT/releases/$SHA/image"
 
-# 3. A verified backup before anything touches the database. No backup, no release.
-if database_exists "$IMAGE"; then
-  result="$(tool "$IMAGE" backup pre-deploy)" || die "pre-deploy backup failed: $result"
-  BACKUP_FILE="$(printf '%s' "$result" | sed -n 's/.*"file":"\([^"]*\)".*/\1/p')"
-  own_backups "$IMAGE"
-  [[ -n "$BACKUP_FILE" ]] || die "pre-deploy backup did not report a file: $result"
-  log "pre-deploy backup written: $(basename "$BACKUP_FILE")"
-else
-  log "no database yet; skipping the pre-deploy backup"
-fi
-
 # The stack as it ran before releases existed: built on the host and started from its source directory.
 # It counts only for the project it actually is, and only while no release has ever been recorded.
 legacy_available() {
@@ -62,6 +51,8 @@ legacy_available() {
 }
 
 start_previous() {
+  # A UID change must not take write access away from a process that is still shutting down.
+  stop_app || return 1
   if [[ -n "$PREVIOUS" ]]; then
     own_data "$(release_image "$PREVIOUS")" || return 1
     activate "$PREVIOUS" || return 1
@@ -111,11 +102,31 @@ roll_back() {
   die "rollback failed; the service needs attention"
 }
 
+# Snapshot after the old process has stopped: a compatibility restore must also retain its last writes.
+# A failed snapshot returns through roll_back, which resumes the previous service.
+snapshot_database() {
+  local result
+  if database_exists "$IMAGE"; then
+    result="$(tool "$IMAGE" backup pre-deploy)" || return 1
+    BACKUP_FILE="$(printf '%s' "$result" | sed -n 's/.*"file":"\([^"]*\)".*/\1/p')"
+    [[ -n "$BACKUP_FILE" ]] || return 1
+    own_backups "$IMAGE" || return 1
+    log "pre-deploy backup written: $(basename "$BACKUP_FILE")"
+  else
+    log "no database yet; skipping the pre-deploy backup"
+  fi
+}
+
 # 4. Switch, and 5. accept the release only when it reports healthy as this exact version, inside the container
 # and through the proxy. The steps run inside one function so that any failing step, expected or not, ends in
 # roll_back instead of ending the script with the new release half started.
 FAILURE="the stack did not start"
 switch_and_verify() {
+  FAILURE="the application could not be stopped"
+  stop_app || return 1
+  FAILURE="the pre-deploy backup failed"
+  snapshot_database || return 1
+  FAILURE="the stack did not start"
   own_data "$IMAGE" || return 1
   activate "$SHA" || return 1
   compose up -d --remove-orphans || return 1
@@ -123,7 +134,7 @@ switch_and_verify() {
   FAILURE="the application did not become healthy"
   wait_healthy "$SHA" || return 1
   FAILURE="the public address did not answer"
-  wait_public || return 1
+  wait_public "$SHA" || return 1
 }
 if ! switch_and_verify; then roll_back "$FAILURE"; fi
 

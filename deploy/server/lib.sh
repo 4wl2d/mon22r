@@ -132,18 +132,19 @@ health_json() {
     "fetch('http://127.0.0.1:3000/healthz').then(async r=>{console.log(await r.text());process.exit(r.ok?0:1)},()=>process.exit(1))"
 }
 
-# Waits until the application reports healthy and, when a version is given, that it is that version.
-# A release older than /healthz answers with the page instead of JSON; that counts as healthy, version unknown.
+# A deploy must prove that this exact build is polling, not merely serving an HTTP page.
+# /healthz emits compact JSON. Legacy releases are checked separately by start_previous.
+healthy_response() {
+  local body="$1" expected="$2"
+  [[ "$body" == \{* && "$body" == *'"ok":true'* &&
+    "$body" == *"\"version\":\"$expected\""* && "$body" == *'"polling":"ok"'* ]]
+}
+
 wait_healthy() {
-  local expected="${1:-}" deadline=$((SECONDS + HEALTH_TIMEOUT)) body=""
+  local expected="$1" deadline=$((SECONDS + HEALTH_TIMEOUT)) body=""
   while ((SECONDS < deadline)); do
-    if body="$(health_json 2>/dev/null)"; then
-      if [[ -z "$expected" || "$body" != \{* ]]; then
-        return 0
-      fi
-      if [[ "$body" == *"\"version\":\"$expected\""* && "$body" == *'"ok":true'* ]]; then
-        return 0
-      fi
+    if body="$(health_json 2>/dev/null)" && healthy_response "$body" "$expected"; then
+      return 0
     fi
     sleep 2
   done
@@ -151,20 +152,21 @@ wait_healthy() {
   return 1
 }
 
-# The same check from outside the stack: through Caddy, with TLS, by the public name.
+# The same version-aware check through Caddy and TLS, by the public name.
 wait_public() {
-  local domain deadline=$((SECONDS + 60))
+  local expected="$1" domain deadline=$((SECONDS + 60)) body=""
   [[ "${MON22R_PUBLIC_CHECK:-on}" != "off" ]] || return 0
   domain="$(setting DOMAIN)"
   [[ -n "$domain" ]] || die "DOMAIN is not set in $ROOT/.env"
   while ((SECONDS < deadline)); do
-    if curl -fsS --max-time 10 --resolve "$domain:443:127.0.0.1" "https://$domain/healthz" >/dev/null 2>&1; then
+    if body="$(curl -fsS --max-time 10 --resolve "$domain:443:127.0.0.1" "https://$domain/healthz" 2>/dev/null)" &&
+      healthy_response "$body" "$expected"; then
       return 0
     fi
     sleep 3
   done
   # The name is left out on purpose: this output can end up in a public pipeline log.
-  log "the public address did not answer through the proxy"
+  log "the public address did not report the healthy release through the proxy"
   return 1
 }
 

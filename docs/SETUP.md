@@ -94,7 +94,7 @@ Every push to `main` that passes all checks is released automatically. One-time 
    | `DEPLOY_USER` | Server user that ran `bootstrap.sh`. |
    | `DEPLOY_KNOWN_HOSTS` | Output of `ssh-keyscan -t ed25519 <server>`, after comparing it with the key you already trust. |
 
-   Delete the local private key file once it is stored.
+   `bootstrap.sh` adds the key with OpenSSH's `restrict` option: no port/agent/X11 forwarding or PTY. It still has the service user's command and Docker privileges, so keep it exclusive to the protected production environment. Delete the local private key file once it is stored.
 
 3. Add the **repository** secret `HEALTHCHECK_URL` with the value `https://<domain>/healthz`. The monitor reads it; keeping it a secret keeps the address out of public logs.
 

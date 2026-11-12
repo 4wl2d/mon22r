@@ -16,14 +16,18 @@ A push to `main` runs the pipeline. Nothing is released unless every step before
 1. **Validate**, on Node 22 and 24: dependency audit, format and lint, shellcheck, typecheck, tests, builds.
 2. **Image**, on arm64: build the image with the commit as its version, run its self-check (native SQLite, migrations, a capture, a backup round trip, packaged Mini App), boot it against a stand-in Bot API, require `/healthz` to report healthy as this commit, and stop it cleanly. The image is then packed with its SHA-256.
 3. **Release to production**, one at a time, never cancelled midway:
+   - superseded runs skip deployment when their commit is no longer the tip of `main`;
    - the server checks the file against its SHA-256, loads it, and checks that its label names this commit;
-   - a verified backup of the live database is written (`mon22r-pre-deploy-…`). If it cannot be written, the release stops here and nothing has changed;
-   - the stack switches to the new image. The old process confirms handled updates with Telegram and checkpoints the database before it exits; requests arriving during the switch wait in the proxy for up to 10 seconds;
+   - the old process stops gracefully, confirming handled updates with Telegram and checkpointing the database;
+   - a verified backup is written (`mon22r-pre-deploy-…`), including those final writes. If it cannot be written, the previous service is resumed and the release fails;
+   - the stack switches to the new image; requests arriving during the switch wait in the proxy for up to 10 seconds;
    - the release counts only when the application reports healthy **as this commit**, inside the container and through the public address.
 
 If the new version is not healthy within two minutes, the previous release is started again, the run fails, and the owner gets a Telegram message saying which version is running.
 
-The version in use is always visible: `status.sh`, `https://<domain>/healthz`, and the bottom of the Mini App's settings.
+The version in use is always visible: `status.sh`, `https://<domain>/healthz`, and the bottom of the Mini App's settings. Both the internal and proxy checks require that exact version and a working poll loop; a 200 response containing the old Mini App page does not pass.
+
+To retry the current `main` release, run **CI** manually with branch `main`. The same validation and image tests run first. A manual run on another branch never gets production credentials or deploys.
 
 ## Rollback
 

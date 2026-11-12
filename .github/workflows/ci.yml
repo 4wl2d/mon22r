@@ -45,9 +45,11 @@ jobs:
         run: pnpm audit --prod --audit-level=high
       - name: Check formatting and lint
         run: pnpm check
-      - name: Lint the release scripts
+      - name: Lint and test the release scripts
         if: matrix.node == 22
-        run: shellcheck -x deploy/server/*.sh
+        run: |
+          shellcheck -x deploy/server/*.sh deploy/ci/*.sh
+          bash deploy/ci/test-server.sh
       - name: Typecheck source and tests
         run: pnpm typecheck
       - name: Test
@@ -148,7 +150,7 @@ jobs:
     name: Release to production
     needs: [validate, image]
     # Only what passed every gate on main is released, and only once the server has been prepared.
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.DEPLOY_ENABLED == 'true'
+    if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main' && vars.DEPLOY_ENABLED == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     environment: production
@@ -157,18 +159,33 @@ jobs:
       group: production
       cancel-in-progress: false
     steps:
+      - name: Ignore a superseded release
+        id: current
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          latest="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')"
+          if [[ "$latest" == "$GITHUB_SHA" ]]; then
+            echo "deploy=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "A newer main revision exists; this run will not replace it." >> "$GITHUB_STEP_SUMMARY"
+          fi
       - name: Check out the release scripts
+        if: steps.current.outputs.deploy == 'true'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Fetch the image that was tested
+        if: steps.current.outputs.deploy == 'true'
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: image-${{ github.sha }}
           path: release
       - name: Verify the image file
+        if: steps.current.outputs.deploy == 'true'
         run: cd release && sha256sum --check image.sha256
       - name: Release
+        if: steps.current.outputs.deploy == 'true'
         env:
           DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
           DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}

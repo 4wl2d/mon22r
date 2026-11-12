@@ -12,11 +12,12 @@ previous="$(release_name previous)" || die "no previous release is installed"
 [[ "$previous" != "$current" ]] || die "the previous release is already current"
 
 log "rolling back from $current to $previous"
+stop_app
 own_data "$(release_image "$previous")"
 activate "$previous"
 compose up -d --remove-orphans
 reload_proxy
-if ! wait_healthy "$previous"; then
+if ! wait_healthy "$previous" || ! wait_public "$previous"; then
   recent_logs 60 || true
   die "release $previous did not become healthy. Check the log above; if it mentions the schema version, run restore.sh with the pre-deploy backup"
 fi

@@ -52,7 +52,8 @@ if [[ -n "$DEPLOY_KEY" ]]; then
   touch "$HOME/.ssh/authorized_keys"
   chmod 600 "$HOME/.ssh/authorized_keys"
   if ! grep -qF "$(printf '%s' "$DEPLOY_KEY" | awk '{print $2}')" "$HOME/.ssh/authorized_keys"; then
-    printf '%s\n' "$DEPLOY_KEY" >>"$HOME/.ssh/authorized_keys"
+    # The CD key needs commands and file transfers only, never forwarding, an agent, or a PTY.
+    printf 'restrict %s\n' "$DEPLOY_KEY" >>"$HOME/.ssh/authorized_keys"
     log "deploy key added to authorized_keys"
   else
     log "deploy key already present"
