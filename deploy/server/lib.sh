@@ -173,7 +173,10 @@ wait_public() {
   local expected="$1" domain deadline=$((SECONDS + 60)) body=""
   [[ "${MON22R_PUBLIC_CHECK:-on}" != "off" ]] || return 0
   domain="$(setting DOMAIN)"
-  [[ -n "$domain" ]] || die "DOMAIN is not set in $ROOT/.env"
+  if [[ -z "$domain" ]]; then
+    log "DOMAIN is not set in $ROOT/.env" >&2
+    return 1
+  fi
   while ((SECONDS < deadline)); do
     if body="$(curl -fsS --max-time 10 --resolve "$domain:443:127.0.0.1" "https://$domain/healthz" 2>/dev/null)" &&
       healthy_response "$body" "$expected"; then

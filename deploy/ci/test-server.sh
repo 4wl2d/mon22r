@@ -48,4 +48,8 @@ answer="{\"ok\":true,\"version\":\"$sha\",\"polling\":\"starting\"}"
 reject wait_healthy "$sha"
 reject wait_public "$sha"
 
+# Configuration errors must return to the recovery path, not exit its caller.
+setting() { return 0; }
+reject wait_public "$sha"
+
 printf 'Deployment health contracts passed\n'
