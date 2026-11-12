@@ -25,8 +25,8 @@ const NAMED_CURRENCIES: Readonly<Record<string, CurrencyCode>> = {
   eur: "EUR",
   usd: "USD",
   jpy: "JPY",
-  "р": "RUB",
-  "руб": "RUB",
+  р: "RUB",
+  руб: "RUB",
   "₽": "RUB",
   "£": "GBP",
 };

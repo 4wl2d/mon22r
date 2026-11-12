@@ -1,6 +1,6 @@
-import { parseAmount, type CurrencyCode, type Direction, type PulledStatementLine } from "@mon22r/domain";
+import { type CurrencyCode, type Direction, type PulledStatementLine, parseAmount } from "@mon22r/domain";
 
-import { cell, currencyFromCell, headerFingerprint, parseCsvTable, type CsvMapping } from "./csv.js";
+import { type CsvMapping, cell, currencyFromCell, headerFingerprint, parseCsvTable } from "./csv.js";
 
 export const SKIP_REASONS = ["opening_balance", "closing_balance", "cashback_points", "unparsed"] as const;
 
@@ -107,7 +107,10 @@ function lineFromRecord(record: Record<string, string>, mapping: CsvMapping): Pu
   };
 }
 
-function readAmount(record: Record<string, string>, mapping: CsvMapping): { minor: number; direction: Direction } | null {
+function readAmount(
+  record: Record<string, string>,
+  mapping: CsvMapping,
+): { minor: number; direction: Direction } | null {
   if (mapping.debit !== undefined || mapping.credit !== undefined) {
     const debit = mapping.debit === undefined ? "" : cell(record, mapping.debit).trim();
     const credit = mapping.credit === undefined ? "" : cell(record, mapping.credit).trim();
@@ -155,8 +158,10 @@ function parseSignedAmount(raw: string): { minor: number; direction: Direction }
 function directionOverride(value: string): Direction | null {
   const token = value.trim().toLowerCase();
   if (token.length === 0) return null;
-  if (token === "out" || token === "outflow" || token === "debit" || token === "expense" || token === "-") return "outflow";
-  if (token === "in" || token === "inflow" || token === "credit" || token === "income" || token === "+") return "inflow";
+  if (token === "out" || token === "outflow" || token === "debit" || token === "expense" || token === "-")
+    return "outflow";
+  if (token === "in" || token === "inflow" || token === "credit" || token === "income" || token === "+")
+    return "inflow";
   return null;
 }
 

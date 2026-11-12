@@ -24,15 +24,15 @@ DOMAIN=ledger.example.com
 
 The numeric ID above is a synthetic placeholder. Telegram usernames are not allowlist IDs.
 
-| Variable | Required | Purpose / default |
-| --- | --- | --- |
-| `BOT_TOKEN` | Yes | Dedicated token issued by BotFather. Used for polling and validating Mini App launch data. |
-| `ALLOWED_TELEGRAM_IDS` | Yes | Comma-separated numeric IDs. Missing or malformed input prevents startup. An empty string creates an empty allowlist and **denies everyone**. |
-| `MINI_APP_URL` | Yes | Full public HTTPS URL shown by the bot's Mini App/menu buttons. |
-| `DATABASE_PATH` | No | SQLite file; defaults to `./data/mon22r.sqlite`. Compose overrides it to `/data/mon22r.sqlite`. |
-| `PORT` | No | HTTP port; defaults to `3000`. Must be an integer from 1 to 65535. |
-| `DOMAIN` | For Compose | Hostname used by Caddy and Compose interpolation. Keep it aligned with `MINI_APP_URL`. |
-| `NODE_ENV` | No | The Docker image sets `production`. Not an access-control setting. |
+| Variable               | Required    | Purpose / default                                                                                                                             |
+| ---------------------- | ----------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `BOT_TOKEN`            | Yes         | Dedicated token issued by BotFather. Used for polling and validating Mini App launch data.                                                    |
+| `ALLOWED_TELEGRAM_IDS` | Yes         | Comma-separated numeric IDs. Missing or malformed input prevents startup. An empty string creates an empty allowlist and **denies everyone**. |
+| `MINI_APP_URL`         | Yes         | Full public HTTPS URL shown by the bot's Mini App/menu buttons.                                                                               |
+| `DATABASE_PATH`        | No          | SQLite file; defaults to `./data/mon22r.sqlite`. Compose overrides it to `/data/mon22r.sqlite`.                                               |
+| `PORT`                 | No          | HTTP port; defaults to `3000`. Must be an integer from 1 to 65535.                                                                            |
+| `DOMAIN`               | For Compose | Hostname used by Caddy and Compose interpolation. Keep it aligned with `MINI_APP_URL`.                                                        |
+| `NODE_ENV`             | No          | The Docker image sets `production`. Not an access-control setting.                                                                            |
 
 The application requires configuration values but does not provision DNS or enforce an HTTPS scheme itself. Configure HTTPS at your reverse proxy.
 

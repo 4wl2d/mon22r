@@ -5,8 +5,8 @@ import {
   awaitingStep,
   decideOnboarding,
   parseStarterAccountChoice,
-  starterAccountsIfConfirmed,
   STARTER_ACCOUNTS,
+  starterAccountsIfConfirmed,
 } from "../src/onboarding.js";
 
 describe("onboarding decisions", () => {

@@ -1,7 +1,7 @@
 import { init, miniApp, retrieveLaunchParams, retrieveRawInitData, viewport } from "@tma.js/sdk";
 import { useLaunchParams, useRawInitData, useSignal } from "@tma.js/sdk-react";
-import { useEffect } from "react";
 import type { CSSProperties } from "react";
+import { useEffect } from "react";
 import { setInitData } from "./api";
 
 export type TelegramBoot = {

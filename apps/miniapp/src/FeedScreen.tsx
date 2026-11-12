@@ -1,8 +1,8 @@
-import { useState } from "react";
-import type { FormEvent } from "react";
 import type { Account, Category, Transaction } from "@mon22r/domain";
+import type { FormEvent } from "react";
+import { useState } from "react";
 import { createCategory, errorText, getAccounts, getCategories, getTransactions, updateTransaction } from "./api";
-import { dayKey, formatClock, formatDayLabel, formatMinor, monthKey, type MonthPoint } from "./format";
+import { dayKey, formatClock, formatDayLabel, formatMinor, type MonthPoint, monthKey } from "./format";
 import { accountLabel, categoryLabel, MonthSwitcher, Status, useResource } from "./ui";
 
 type FeedData = {
@@ -64,11 +64,7 @@ export function FeedScreen({
       {resource.status === "ready" ? (
         <>
           {resource.data.transactions.length === 0 ? <p>В этом месяце операций нет.</p> : null}
-          <FeedList
-            timeZone={timeZone}
-            data={resource.data}
-            onChange={(transactions) => replace(transactions)}
-          />
+          <FeedList timeZone={timeZone} data={resource.data} onChange={(transactions) => replace(transactions)} />
           <form className="panel" onSubmit={(event) => void addCategory(event)}>
             <label>
               Новая категория
@@ -135,7 +131,8 @@ function Operation({
   const [saving, setSaving] = useState(false);
   const description = transaction.description.trim();
   const sameCurrency = accounts.filter(
-    (account) => account.currency === transaction.currency && (!account.archived || account.id === transaction.accountId),
+    (account) =>
+      account.currency === transaction.currency && (!account.archived || account.id === transaction.accountId),
   );
 
   async function save(patch: { categoryId?: string | null; accountId?: string }) {

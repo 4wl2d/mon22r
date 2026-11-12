@@ -1,5 +1,5 @@
-import { index, integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 import { sql } from "drizzle-orm";
+import { index, integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 
 /**
  * User-owned rows are always queried with that user's id.
@@ -161,9 +161,7 @@ export const importExternalKeys = sqliteTable(
       .references(() => transactions.id),
     createdAt: text("created_at").notNull(),
   },
-  (table) => [
-    uniqueIndex("import_external_keys_identity_unique").on(table.userId, table.source, table.externalKey),
-  ],
+  (table) => [uniqueIndex("import_external_keys_identity_unique").on(table.userId, table.source, table.externalKey)],
 );
 
 export const statementProfiles = sqliteTable(

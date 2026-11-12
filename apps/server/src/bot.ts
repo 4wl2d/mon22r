@@ -7,19 +7,25 @@ import {
   getTransaction,
   getUserByTelegramId,
   listCategories,
+  type Mon22rDb,
   readUserFlags,
   updateIncomeExpectation,
   updateStoredUser,
-  type Mon22rDb,
 } from "@mon22r/db";
 import { DEFAULT_TIME_ZONE, LedgerError, matchInflowToExpectation, type User } from "@mon22r/domain";
-import { Bot, InlineKeyboard, type Context } from "grammy";
+import { Bot, type Context, InlineKeyboard } from "grammy";
 
 import { callbackData, readCallback } from "./callbacks.js";
 import { applyPhrase, type CaptureResult } from "./capture.js";
 import { buttons, monthLabel, text } from "./copy.js";
 import { formatEntry, formatMinor } from "./format.js";
-import { assignPreviewAccount, commitStoredPreview, previewUpload, savePendingProfile, type UploadResult } from "./imports.js";
+import {
+  assignPreviewAccount,
+  commitStoredPreview,
+  previewUpload,
+  savePendingProfile,
+  type UploadResult,
+} from "./imports.js";
 import { awaitingStep, decideOnboarding, type OnboardingStep } from "./onboarding.js";
 import { createStarterAccounts } from "./starter.js";
 
@@ -61,7 +67,11 @@ export function createBot(input: {
       if (parsed?.prefix === "z" && session.step === "timezone" && session.user !== null) {
         updateStoredUser(input.db, session.user.id, { timeZone: DEFAULT_TIME_ZONE, onboardingStep: "accounts" });
         await ctx.reply(text.askAccounts, { reply_markup: accountsKeyboard() });
-      } else if ((parsed?.prefix === "y" || parsed?.prefix === "n") && session.step === "accounts" && session.user !== null) {
+      } else if (
+        (parsed?.prefix === "y" || parsed?.prefix === "n") &&
+        session.step === "accounts" &&
+        session.user !== null
+      ) {
         await finishAccounts(input.db, session.user.id, parsed.prefix === "y", ctx, appMarkup);
       } else if (parsed?.prefix === "u" && session.user !== null) {
         const id = parsed.ids[0];
@@ -177,7 +187,13 @@ export function createBot(input: {
       if (/^профиль(?:\s|$)/iu.test(message)) {
         const saved = savePendingProfile(input.db, session.user, message);
         await ctx.reply(
-          saved === "saved" ? text.profileSaved : saved === "missing" ? text.fileFirst : saved === "columns" ? text.columnsMissing : text.profileBad,
+          saved === "saved"
+            ? text.profileSaved
+            : saved === "missing"
+              ? text.fileFirst
+              : saved === "columns"
+                ? text.columnsMissing
+                : text.profileBad,
         );
         return;
       }
@@ -272,9 +288,19 @@ function renderCapture(result: CaptureResult): string {
     case "currency_mismatch":
       return text.currencyMismatch(result.accountName, result.accountCurrency, result.amountCurrency);
     case "saved":
-      return formatEntry(result.transaction.amountMinor, result.transaction.currency, result.transaction.description, result.account.name);
+      return formatEntry(
+        result.transaction.amountMinor,
+        result.transaction.currency,
+        result.transaction.description,
+        result.account.name,
+      );
     case "transfer":
-      return formatEntry(result.transactions[0].amountMinor, result.transactions[0].currency, result.transactions[0].description, result.from.name);
+      return formatEntry(
+        result.transactions[0].amountMinor,
+        result.transactions[0].currency,
+        result.transactions[0].description,
+        result.from.name,
+      );
     case "plan":
       return text.planSaved(
         formatMinor(result.plan.amountMinor, result.plan.currency),
@@ -305,7 +331,12 @@ function captureKeyboard(db: Mon22rDb, userId: string, result: CaptureResult): I
   return keyboard.inline_keyboard.length === 0 ? undefined : keyboard;
 }
 
-async function rememberCategory(db: Mon22rDb, userId: string, transactionId: string | undefined, categoryId: string | undefined): Promise<string | undefined> {
+async function rememberCategory(
+  db: Mon22rDb,
+  userId: string,
+  transactionId: string | undefined,
+  categoryId: string | undefined,
+): Promise<string | undefined> {
   if (transactionId === undefined || categoryId === undefined) return undefined;
   try {
     correctTransaction(db, userId, transactionId, { categoryId });
@@ -316,7 +347,12 @@ async function rememberCategory(db: Mon22rDb, userId: string, transactionId: str
   }
 }
 
-function closeOffer(db: Mon22rDb, userId: string, transactionId: string | undefined, expectationId: string | undefined): string {
+function closeOffer(
+  db: Mon22rDb,
+  userId: string,
+  transactionId: string | undefined,
+  expectationId: string | undefined,
+): string {
   if (transactionId === undefined || expectationId === undefined) return text.alreadyClosed;
   const transaction = getTransaction(db, userId, transactionId);
   const expectation = getIncomeExpectation(db, userId, expectationId);
@@ -353,7 +389,8 @@ async function commitImport(db: Mon22rDb, user: User, previewId: string, ctx: Co
 
 function renderAssignment(result: UploadResult): string {
   if (result.type === "ready") return `${text.importCounts(result.counts)}\n${result.account.name}`;
-  if (result.type === "currency_mismatch") return text.currencyMismatch(result.accountName, result.accountCurrency, result.fileCurrency);
+  if (result.type === "currency_mismatch")
+    return text.currencyMismatch(result.accountName, result.accountCurrency, result.fileCurrency);
   if (result.type === "no_account") return text.noAccount(result.currency);
   if (result.type === "mixed_currency") return text.mixedCurrency;
   return text.fileUnreadable;

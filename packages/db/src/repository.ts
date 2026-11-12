@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
-
-import { and, desc, eq, gte, inArray, lt } from "drizzle-orm";
 import {
+  type Account,
   assertAccountCurrency,
   assertCurrency,
   assertFxRate,
@@ -9,32 +8,32 @@ import {
   assertOwnedCategory,
   assertTimeZone,
   assertUserId,
-  canonicalTimestamp,
   createAccount as buildAccount,
   createCategory as buildCategory,
   createIncomeExpectation as buildIncomeExpectation,
   createIncomePlan as buildIncomePlan,
+  type CalendarMonth,
+  type Category,
+  type CurrencyCode,
+  canonicalTimestamp,
   createTransaction,
   createTransfer,
   createUserProfile,
   DEFAULT_TIME_ZONE,
-  expectationFromPlan,
-  LedgerError,
-  matchInflowToExpectation,
-  type Account,
-  type CalendarMonth,
-  type Category,
-  type CurrencyCode,
   type ExpectationStatus,
+  expectationFromPlan,
   type FxRate,
   type ImportIdentity,
   type IncomeExpectation,
   type IncomePlan,
+  LedgerError,
   type Money,
+  matchInflowToExpectation,
   type PlanRecurrence,
   type Transaction,
   type User,
 } from "@mon22r/domain";
+import { and, desc, eq, gte, inArray, lt } from "drizzle-orm";
 
 import type { Mon22rDb } from "./client.js";
 import {
@@ -249,7 +248,12 @@ export function recordTransaction(
   const owner = assertUserId(userId);
   const apply = db.sqlite.transaction(() => {
     if (input.importIdentity) {
-      const existing = findTransactionByImportKey(db, owner, input.importIdentity.source, input.importIdentity.externalKey);
+      const existing = findTransactionByImportKey(
+        db,
+        owner,
+        input.importIdentity.source,
+        input.importIdentity.externalKey,
+      );
       if (existing) return { status: "duplicate" as const, transaction: existing };
     }
     const account = requireAccount(db, owner, input.accountId);
@@ -711,12 +715,7 @@ export function matchInflowAndSave(
   const open = db.orm
     .select()
     .from(incomeExpectations)
-    .where(
-      and(
-        eq(incomeExpectations.userId, owner),
-        inArray(incomeExpectations.status, ["expected", "partial"]),
-      ),
-    )
+    .where(and(eq(incomeExpectations.userId, owner), inArray(incomeExpectations.status, ["expected", "partial"])))
     .all()
     .map(toExpectation);
   const match = matchInflowToExpectation(
@@ -761,7 +760,10 @@ export function upsertFxRate(db: Mon22rDb, rate: FxRate): FxRate {
       .run();
     return valid;
   }
-  db.orm.insert(fxRates).values({ id: randomUUID(), ...valid }).run();
+  db.orm
+    .insert(fxRates)
+    .values({ id: randomUUID(), ...valid })
+    .run();
   return valid;
 }
 
@@ -1232,7 +1234,10 @@ export function deleteTransaction(db: Mon22rDb, userId: string, id: string): rea
       .delete(importExternalKeys)
       .where(and(eq(importExternalKeys.userId, owner), inArray(importExternalKeys.transactionId, ids)))
       .run();
-    db.orm.delete(transactions).where(and(eq(transactions.userId, owner), inArray(transactions.id, ids))).run();
+    db.orm
+      .delete(transactions)
+      .where(and(eq(transactions.userId, owner), inArray(transactions.id, ids)))
+      .run();
   });
   apply();
   return targets;
@@ -1331,7 +1336,12 @@ export type ImportPreviewRecord = {
 export function insertImportPreview(
   db: Mon22rDb,
   userId: string,
-  input: { readonly source: string; readonly accountId: string | null; readonly linesJson: string; readonly id?: string },
+  input: {
+    readonly source: string;
+    readonly accountId: string | null;
+    readonly linesJson: string;
+    readonly id?: string;
+  },
 ): ImportPreviewRecord {
   const owner = assertUserId(userId);
   requireUserRow(db, owner);
@@ -1358,7 +1368,12 @@ export function readImportPreview(db: Mon22rDb, userId: string, id: string): Imp
   return row === undefined ? null : toImportPreview(row);
 }
 
-export function updateImportPreviewAccount(db: Mon22rDb, userId: string, id: string, accountId: string): ImportPreviewRecord {
+export function updateImportPreviewAccount(
+  db: Mon22rDb,
+  userId: string,
+  id: string,
+  accountId: string,
+): ImportPreviewRecord {
   const owner = assertUserId(userId);
   const existing = readImportPreview(db, owner, id);
   if (existing === null) throw new LedgerError("not_found", "Import preview was not found for this user");
@@ -1374,7 +1389,10 @@ export function updateImportPreviewAccount(db: Mon22rDb, userId: string, id: str
 
 export function removeImportPreview(db: Mon22rDb, userId: string, id: string): void {
   const owner = assertUserId(userId);
-  db.orm.delete(importPreviews).where(and(eq(importPreviews.userId, owner), eq(importPreviews.id, id))).run();
+  db.orm
+    .delete(importPreviews)
+    .where(and(eq(importPreviews.userId, owner), eq(importPreviews.id, id)))
+    .run();
 }
 
 function rebuildTransaction(existing: Transaction, accountId: string, categoryId: string | null): Transaction {

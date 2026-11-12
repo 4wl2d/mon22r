@@ -94,7 +94,8 @@ export function monthRange(month: CalendarMonth, timeZone: string): MonthRange {
     day: 1,
     timeZone: zone,
   });
-  const next = current.month === 12 ? { year: current.year + 1, month: 1 } : { year: current.year, month: current.month + 1 };
+  const next =
+    current.month === 12 ? { year: current.year + 1, month: 1 } : { year: current.year, month: current.month + 1 };
   const endExclusive = zonedDateTimeToUtc({
     year: next.year,
     month: next.month,

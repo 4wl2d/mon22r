@@ -1,4 +1,4 @@
-import { assertCurrency, parseAmount, type CurrencyCode } from "@mon22r/domain";
+import { assertCurrency, type CurrencyCode, parseAmount } from "@mon22r/domain";
 
 /**
  * Column names are the header cells from the file the user confirmed.
@@ -27,7 +27,10 @@ export function headerFingerprint(headers: readonly string[]): string {
 }
 
 export function parseCsvTable(csv: string): CsvTable {
-  const text = csv.replace(/^\uFEFF/, "").replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  const text = csv
+    .replace(/^\uFEFF/, "")
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n");
   if (text.trim().length === 0) return { headers: [], records: [] };
   const delimiter = detectDelimiter(text);
   const matrix = parseMatrix(text, delimiter);

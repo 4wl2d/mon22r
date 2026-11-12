@@ -1,14 +1,14 @@
-import { useRef, useState } from "react";
-import type { FormEvent, KeyboardEvent } from "react";
 import type { Account, ExpectationStatus, IncomeExpectation, IncomePlan, PlanRecurrence } from "@mon22r/domain";
+import type { FormEvent, KeyboardEvent } from "react";
+import { useRef, useState } from "react";
 import {
   copyPlans,
   errorText,
   getAccounts,
   getPlans,
+  type PlanRow,
   updateExpectationStatus,
   updatePlanAmount,
-  type PlanRow,
 } from "./api";
 import {
   addMonths,
@@ -74,13 +74,23 @@ export function PlansScreen({ timeZone }: { timeZone: string }) {
               key={rowKey(row)}
               row={row}
               accounts={resource.data.accounts}
-              onAmount={(plan) => replace(resource.data.plans.map((item) => (sameRow(item, row) ? withPlan(item, plan) : item)))}
+              onAmount={(plan) =>
+                replace(resource.data.plans.map((item) => (sameRow(item, row) ? withPlan(item, plan) : item)))
+              }
               onStatus={(expectation) =>
-                replace(resource.data.plans.map((item) => (sameRow(item, row) ? withExpectation(item, expectation) : item)))
+                replace(
+                  resource.data.plans.map((item) => (sameRow(item, row) ? withExpectation(item, expectation) : item)),
+                )
               }
             />
           ))}
-          <button type="button" className="button" onClick={() => void repeatPlan()} disabled={copying} aria-busy={copying}>
+          <button
+            type="button"
+            className="button"
+            onClick={() => void repeatPlan()}
+            disabled={copying}
+            aria-busy={copying}
+          >
             Повторить план этого месяца
           </button>
           {note ? <p>{note}</p> : null}
@@ -107,23 +117,15 @@ function PlanCard({
     <article className={view.status === "skipped" ? "plan quiet" : "plan"}>
       <h2 className="plan-name">{view.name}</h2>
       {view.planId ? (
-        <AmountEditor
-          amountMinor={view.amountMinor}
-          currency={view.currency}
-          planId={view.planId}
-          onSaved={onAmount}
-        />
+        <AmountEditor amountMinor={view.amountMinor} currency={view.currency} planId={view.planId} onSaved={onAmount} />
       ) : (
         <p>{formatMinor(view.amountMinor, view.currency)}</p>
       )}
       <p className="meta">{planMeta(view.dayOfMonth, accountLabel(accounts, view.accountId), view.recurrence)}</p>
-      {view.receivedMinor > 0 ? <p className="received">получено {formatMinor(view.receivedMinor, view.currency)}</p> : null}
-      <StatusControl
-        status={view.status}
-        expectationId={view.expectationId}
-        onSaved={onStatus}
-        onError={setError}
-      />
+      {view.receivedMinor > 0 ? (
+        <p className="received">получено {formatMinor(view.receivedMinor, view.currency)}</p>
+      ) : null}
+      <StatusControl status={view.status} expectationId={view.expectationId} onSaved={onStatus} onError={setError} />
       {error ? <p className="field-error">{error}</p> : null}
     </article>
   );

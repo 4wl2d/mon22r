@@ -3,15 +3,15 @@ import {
   getIncomeExpectation,
   listIncomeExpectations,
   listIncomePlans,
+  type Mon22rDb,
   materializePlanExpectation,
   updateIncomeExpectation,
   updateIncomePlan,
-  type Mon22rDb,
 } from "@mon22r/db";
 import {
-  expectationFromPlan,
   type CalendarMonth,
   type ExpectationStatus,
+  expectationFromPlan,
   type IncomeExpectation,
   type IncomePlan,
 } from "@mon22r/domain";
@@ -28,7 +28,8 @@ export function materializeApplicable(db: Mon22rDb, userId: string, month: Calen
 export function refreshOpenExpectations(db: Mon22rDb, userId: string, plan: IncomePlan): void {
   const open = listIncomeExpectationsForPlan(db, userId, plan.id);
   for (const expectation of open) {
-    if (expectation.currency !== plan.currency || expectation.status !== "expected" || expectation.receivedMinor !== 0) continue;
+    if (expectation.currency !== plan.currency || expectation.status !== "expected" || expectation.receivedMinor !== 0)
+      continue;
     updateIncomeExpectation(db, userId, expectation.id, {
       name: plan.name,
       expectedMinor: plan.amountMinor,
@@ -60,13 +61,19 @@ export function setExpectationStatus(
   return updateIncomeExpectation(db, userId, id, { status });
 }
 
-export function copyPlans(db: Mon22rDb, userId: string, from: CalendarMonth, to: CalendarMonth): readonly IncomeExpectation[] {
+export function copyPlans(
+  db: Mon22rDb,
+  userId: string,
+  from: CalendarMonth,
+  to: CalendarMonth,
+): readonly IncomeExpectation[] {
   if (from.year === to.year && from.month === to.month) return listIncomeExpectations(db, userId, to);
   const source = listIncomeExpectations(db, userId, from);
   const plans = listIncomePlans(db, userId);
   if (source.length === 0) {
     for (const plan of plans) {
-      if (expectationFromPlan(plan, from, "draft") === null || expectationFromPlan(plan, to, "draft") === null) continue;
+      if (expectationFromPlan(plan, from, "draft") === null || expectationFromPlan(plan, to, "draft") === null)
+        continue;
       materializePlanExpectation(db, userId, plan.id, to);
     }
     return listIncomeExpectations(db, userId, to);

@@ -15,6 +15,7 @@ import {
   listIncomeExpectations,
   listIncomePlans,
   listTransactions,
+  type Mon22rDb,
   materializePlanExpectation,
   readUserFlags,
   recordTransaction,
@@ -22,16 +23,15 @@ import {
   updateAccount,
   updateIncomePlan,
   updateStoredUser,
-  type Mon22rDb,
 } from "@mon22r/db";
 import {
   assertCalendarMonth,
+  type CalendarMonth,
   EXPECTATION_STATUSES,
+  type ExpectationStatus,
   expectationFromPlan,
   LedgerError,
   monthRange,
-  type CalendarMonth,
-  type ExpectationStatus,
   type PlanRecurrence,
   type User,
 } from "@mon22r/domain";
@@ -39,8 +39,8 @@ import type { PreviewRow } from "@mon22r/importers";
 import { Hono, type MiddlewareHandler } from "hono";
 
 import { AccessError, telegramUserId } from "./auth.js";
-import { buildMonthView } from "./month-view.js";
 import { commitStoredPreview, previewUpload, type UploadResult } from "./imports.js";
+import { buildMonthView } from "./month-view.js";
 import { copyPlans, materializeApplicable, refreshOpenExpectations, setExpectationStatus } from "./plans.js";
 import { createStarterAccounts } from "./starter.js";
 
@@ -69,7 +69,8 @@ export function createApp(input: {
   app.onError((error, c) => {
     if (error instanceof AccessError) return c.json({ error: error.message, code: "unauthorized" }, 401);
     if (error instanceof OnboardingRequired) return c.json({ error: error.message, code: "onboarding_required" }, 409);
-    if (error instanceof LedgerError) return c.json({ error: error.message, code: error.code }, ledgerStatus(error.code));
+    if (error instanceof LedgerError)
+      return c.json({ error: error.message, code: error.code }, ledgerStatus(error.code));
     console.error(error);
     return c.json({ error: "Ошибка сервера.", code: "internal" }, 500);
   });
@@ -250,7 +251,8 @@ export function createApp(input: {
       amountMinor: readMinor(body, "amountMinor"),
       currency: readString(body, "currency"),
       categoryId: readOptionalNullable(body, "categoryId"),
-      refundOfTransactionId: kind === "refund" ? (readOptionalNullable(body, "refundOfTransactionId") ?? null) : undefined,
+      refundOfTransactionId:
+        kind === "refund" ? (readOptionalNullable(body, "refundOfTransactionId") ?? null) : undefined,
       occurredAt,
       description,
       createdAt,
@@ -281,7 +283,10 @@ export function createApp(input: {
   app.post("/api/accounts", async (c) => {
     const user = requireUser(db, c.get("telegramId"));
     const body = await readBody(c);
-    const account = createAccount(db, user.id, { name: readText(body, "name"), currency: readString(body, "currency") });
+    const account = createAccount(db, user.id, {
+      name: readText(body, "name"),
+      currency: readString(body, "currency"),
+    });
     return c.json({ account }, 201);
   });
 
@@ -359,7 +364,13 @@ function uploadJson(result: UploadResult): Record<string, unknown> {
         fileCurrency: result.fileCurrency,
       };
     case "counts":
-      return { status: "preview", id: null, source: result.source, counts: result.counts, rows: result.rows.map(publicRow) };
+      return {
+        status: "preview",
+        id: null,
+        source: result.source,
+        counts: result.counts,
+        rows: result.rows.map(publicRow),
+      };
     case "choose_account":
       return {
         status: "account_required",
@@ -514,7 +525,8 @@ function readOptionalText(body: Record<string, unknown>, key: string): string | 
 
 function readCsv(body: Record<string, unknown>): string {
   const value = body.csv;
-  if (typeof value !== "string" || value.trim().length === 0) throw new LedgerError("invalid_posting", "csv is required");
+  if (typeof value !== "string" || value.trim().length === 0)
+    throw new LedgerError("invalid_posting", "csv is required");
   return value;
 }
 

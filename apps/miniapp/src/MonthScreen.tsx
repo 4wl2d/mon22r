@@ -1,15 +1,9 @@
 import type { Category, CategorySpend, CurrencyTotals } from "@mon22r/domain";
 import { getCategories, getMonth, type MonthView } from "./api";
-import { formatMinor, formatRateDate, monthKey, type MonthPoint } from "./format";
+import { formatMinor, formatRateDate, type MonthPoint, monthKey } from "./format";
 import { categoryLabel, MonthSwitcher, Status, useResource } from "./ui";
 
-export function MonthScreen({
-  point,
-  onChange,
-}: {
-  point: MonthPoint;
-  onChange: (point: MonthPoint) => void;
-}) {
+export function MonthScreen({ point, onChange }: { point: MonthPoint; onChange: (point: MonthPoint) => void }) {
   const key = monthKey(point);
   const { resource, reload } = useResource(key, () => loadMonth(key), "Не удалось загрузить месяц.");
 
@@ -21,7 +15,9 @@ export function MonthScreen({
       {resource.status === "error" ? (
         <Status text={resource.message} action={{ label: "Повторить", onClick: reload }} />
       ) : null}
-      {resource.status === "ready" ? <MonthBody view={resource.data.view} categories={resource.data.categories} /> : null}
+      {resource.status === "ready" ? (
+        <MonthBody view={resource.data.view} categories={resource.data.categories} />
+      ) : null}
     </section>
   );
 }
@@ -40,11 +36,7 @@ function MonthBody({ view, categories }: { view: MonthView; categories: readonly
           categories={categories}
         />
       ))}
-      {view.estimateInHomeCurrency ? (
-        <p className="estimate">
-          {estimateLine(view.estimateInHomeCurrency)}
-        </p>
-      ) : null}
+      {view.estimateInHomeCurrency ? <p className="estimate">{estimateLine(view.estimateInHomeCurrency)}</p> : null}
     </>
   );
 }

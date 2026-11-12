@@ -1,6 +1,6 @@
-import { useRef, useState } from "react";
-import type { FormEvent } from "react";
 import type { Account } from "@mon22r/domain";
+import type { FormEvent } from "react";
+import { useRef, useState } from "react";
 import { createAccount, errorText, getAccounts, updateAccount } from "./api";
 import { Status, useResource } from "./ui";
 
@@ -176,7 +176,12 @@ function AccountRow({ account, onChange }: { account: Account; onChange: (accoun
         <span>{account.currency}</span>
       </div>
       <div className="account-actions">
-        <button type="button" className="text-button" disabled={saving} onClick={() => void setArchived(!account.archived)}>
+        <button
+          type="button"
+          className="text-button"
+          disabled={saving}
+          onClick={() => void setArchived(!account.archived)}
+        >
           {account.archived ? "вернуть" : "в архив"}
         </button>
       </div>

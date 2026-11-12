@@ -1,19 +1,18 @@
-import { afterEach, describe, expect, it } from "vitest";
-
 import {
   createAccount,
   createCategory,
   createUser,
-  listIncomePlans,
   listIncomeExpectations,
+  listIncomePlans,
   listTransactions,
+  type Mon22rDb,
   matchInflowAndSave,
   migrate,
   openDatabase,
   recordTransaction,
-  type Mon22rDb,
 } from "@mon22r/db";
 import { isTransaction, totalsByCurrency } from "@mon22r/domain";
+import { afterEach, describe, expect, it } from "vitest";
 
 import { applyPhrase } from "../src/capture.js";
 import { createStarterAccounts } from "../src/starter.js";
@@ -65,7 +64,13 @@ describe("capture", () => {
     if (first.type !== "plan") return;
     expect(isTransaction(first.plan)).toBe(false);
     expect(isTransaction(first.expectation)).toBe(false);
-    expect(first.expectation).toMatchObject({ year: 2026, month: 12, dayOfMonth: 5, expectedMinor: 18_000_000, status: "expected" });
+    expect(first.expectation).toMatchObject({
+      year: 2026,
+      month: 12,
+      dayOfMonth: 5,
+      expectedMinor: 18_000_000,
+      status: "expected",
+    });
     expect(listTransactions(db, user.id)).toEqual([]);
 
     const second = applyPhrase(db, user, "план зп 90000 7", now);

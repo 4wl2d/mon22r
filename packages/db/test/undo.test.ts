@@ -1,22 +1,21 @@
-import { afterEach, describe, expect, it } from "vitest";
-
 import {
   createAccount,
   createUser,
   deleteLatestTransaction,
   deleteTransaction,
+  findStatementProfileByFingerprint,
   findTransactionByImportKey,
   listTransactions,
+  type Mon22rDb,
   migrate,
   openDatabase,
   readUserFlags,
   recordTransaction,
   recordTransfer,
   saveStatementProfile,
-  findStatementProfileByFingerprint,
   updateStoredUser,
-  type Mon22rDb,
 } from "@mon22r/db";
+import { afterEach, describe, expect, it } from "vitest";
 
 const open: Mon22rDb[] = [];
 
@@ -115,7 +114,10 @@ describe("undo", () => {
     const db = database();
     const user = createUser(db, { id: "user-a", telegramId: 1, homeCurrency: "RSD" });
     const other = createUser(db, { id: "user-b", telegramId: 2, homeCurrency: "EUR" });
-    updateStoredUser(db, user.id, { onboardingStep: "accounts", pendingCsvJson: '{"fingerprint":"a|b","headers":["A","B"]}' });
+    updateStoredUser(db, user.id, {
+      onboardingStep: "accounts",
+      pendingCsvJson: '{"fingerprint":"a|b","headers":["A","B"]}',
+    });
     expect(readUserFlags(db, user.id)).toEqual({
       onboardingStep: "accounts",
       pendingCsvJson: '{"fingerprint":"a|b","headers":["A","B"]}',

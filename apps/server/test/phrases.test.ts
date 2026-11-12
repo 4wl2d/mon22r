@@ -1,6 +1,5 @@
-import { describe, expect, it } from "vitest";
-
 import { isTransaction, parseAmount } from "@mon22r/domain";
+import { describe, expect, it } from "vitest";
 
 import { formatEntry } from "../src/format.js";
 import { nextCalendarMonth, parsePhrase, rememberedCategoryId, shiftLocalDays } from "../src/phrases.js";

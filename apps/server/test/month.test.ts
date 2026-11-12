@@ -1,6 +1,14 @@
+import {
+  createAccount,
+  createUser,
+  getTransaction,
+  type Mon22rDb,
+  migrate,
+  openDatabase,
+  recordTransaction,
+  upsertFxRate,
+} from "@mon22r/db";
 import { afterEach, describe, expect, it } from "vitest";
-
-import { createAccount, createUser, getTransaction, migrate, openDatabase, recordTransaction, upsertFxRate, type Mon22rDb } from "@mon22r/db";
 
 import { buildMonthView } from "../src/month-view.js";
 
@@ -57,7 +65,12 @@ describe("month estimate", () => {
       source: "ecb",
     });
     const estimated = buildMonthView(db, user, { year: 2026, month: 11 });
-    expect(estimated.estimateInHomeCurrency).toMatchObject({ kind: "estimate", currency: "RSD", usedConversion: true, asOf: "2026-11-12" });
+    expect(estimated.estimateInHomeCurrency).toMatchObject({
+      kind: "estimate",
+      currency: "RSD",
+      usedConversion: true,
+      asOf: "2026-11-12",
+    });
     expect(estimated.estimateInHomeCurrency?.minor).toBe(-450 * 150 - 35_000);
     expect(getTransaction(db, user.id, "pounds")?.amountMinor).toBe(450);
     expect(getTransaction(db, user.id, "dinars")?.amountMinor).toBe(35_000);

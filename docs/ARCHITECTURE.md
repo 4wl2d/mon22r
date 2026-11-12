@@ -4,15 +4,15 @@ A TypeScript pnpm workspace with a Telegram bot and a React Mini App sharing one
 
 ## Actual roots
 
-| Root | Responsibility |
-| --- | --- |
-| `apps/server/src` | Environment parsing, grammY bot, text capture, onboarding, Hono routes, Telegram authentication, month views, plans, and import orchestration. |
-| `apps/miniapp/src` | React screens for setup, month, next-month plans, feed, and accounts; API client and Telegram viewport/launch integration. |
-| `packages/domain/src` | Money parsing, transaction invariants, calendar/time-zone calculations, totals, income expectations, FX estimation, and a future bank-adapter interface. |
-| `packages/db/src` | SQLite connection, Drizzle schema, versioned SQL migrations, and user-scoped repository operations. |
-| `packages/importers/src` | CSV parsing and mappings, header fingerprints, preview classification, and statement-line commit logic. |
-| `apps/server/test`, `packages/*/test` | Vitest tests for auth, capture, contracts, ledger operations, money/month semantics, imports, and undo. |
-| `Dockerfile`, `docker-compose.yml`, `Caddyfile` | Build and manual deployment configuration. |
+| Root                                            | Responsibility                                                                                                                                           |
+| ----------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `apps/server/src`                               | Environment parsing, grammY bot, text capture, onboarding, Hono routes, Telegram authentication, month views, plans, and import orchestration.           |
+| `apps/miniapp/src`                              | React screens for setup, month, next-month plans, feed, and accounts; API client and Telegram viewport/launch integration.                               |
+| `packages/domain/src`                           | Money parsing, transaction invariants, calendar/time-zone calculations, totals, income expectations, FX estimation, and a future bank-adapter interface. |
+| `packages/db/src`                               | SQLite connection, Drizzle schema, versioned SQL migrations, and user-scoped repository operations.                                                      |
+| `packages/importers/src`                        | CSV parsing and mappings, header fingerprints, preview classification, and statement-line commit logic.                                                  |
+| `apps/server/test`, `packages/*/test`           | Vitest tests for auth, capture, contracts, ledger operations, money/month semantics, imports, and undo.                                                  |
+| `Dockerfile`, `docker-compose.yml`, `Caddyfile` | Build and manual deployment configuration.                                                                                                               |
 
 The Mini App uses React 19, Vite, and the Telegram Mini Apps SDK. The bot uses grammY, HTTP uses Hono, and persistence uses Drizzle with `better-sqlite3`. UI fonts are Fraunces and IBM Plex Sans.
 

@@ -1,7 +1,6 @@
-import { afterEach, describe, expect, it } from "vitest";
-
-import { migrate, openDatabase, type Mon22rDb } from "@mon22r/db";
+import { type Mon22rDb, migrate, openDatabase } from "@mon22r/db";
 import { sign } from "@tma.js/init-data-node";
+import { afterEach, describe, expect, it } from "vitest";
 
 import { createApp } from "../src/http.js";
 

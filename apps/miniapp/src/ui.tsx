@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from "react";
 import type { Account, Category } from "@mon22r/domain";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { errorText } from "./api";
 import { addMonths, formatMonthTitle, type MonthPoint } from "./format";
 
@@ -62,13 +62,7 @@ export function Status({
   );
 }
 
-export function MonthSwitcher({
-  point,
-  onChange,
-}: {
-  point: MonthPoint;
-  onChange: (point: MonthPoint) => void;
-}) {
+export function MonthSwitcher({ point, onChange }: { point: MonthPoint; onChange: (point: MonthPoint) => void }) {
   const atStart = point.year <= 1 && point.month <= 1;
   const atEnd = point.year >= 9999 && point.month >= 12;
   return (

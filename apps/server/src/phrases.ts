@@ -1,10 +1,4 @@
-import {
-  LedgerError,
-  monthContaining,
-  parseAmount,
-  zonedDateTimeToUtc,
-  type CalendarMonth,
-} from "@mon22r/domain";
+import { type CalendarMonth, LedgerError, monthContaining, parseAmount, zonedDateTimeToUtc } from "@mon22r/domain";
 
 export type ExpensePhrase = {
   readonly type: "expense";
@@ -55,7 +49,12 @@ export function normalizeNote(value: string): string {
 
 export function rememberedCategoryId(
   note: string,
-  history: readonly { readonly description: string; readonly categoryId: string | null; readonly createdAt: string; readonly id?: string }[],
+  history: readonly {
+    readonly description: string;
+    readonly categoryId: string | null;
+    readonly createdAt: string;
+    readonly id?: string;
+  }[],
 ): string | null {
   const key = normalizeNote(note);
   if (key.length === 0) return null;
@@ -140,7 +139,8 @@ function parseTransfer(rest: string, occurredAt: string): TransferPhrase | null 
 
 function classify(input: string): { readonly kind: "plan" | "transfer" | "income" | "expense"; readonly rest: string } {
   if (/^план(?:\s+|$)/iu.test(input)) return { kind: "plan", rest: input.replace(/^план(?:\s+|$)/iu, "").trim() };
-  if (/^перевод(?:\s+|$)/iu.test(input)) return { kind: "transfer", rest: input.replace(/^перевод(?:\s+|$)/iu, "").trim() };
+  if (/^перевод(?:\s+|$)/iu.test(input))
+    return { kind: "transfer", rest: input.replace(/^перевод(?:\s+|$)/iu, "").trim() };
   if (input.startsWith("+")) return { kind: "income", rest: input.slice(1).trim() };
   return { kind: "expense", rest: input };
 }
@@ -163,7 +163,9 @@ function peelDay(input: string): { readonly rest: string; readonly day: number }
   return { rest, day };
 }
 
-function splitNoteAndAmount(input: string): { readonly note: string; readonly amount: ReturnType<typeof parseAmount> } | null {
+function splitNoteAndAmount(
+  input: string,
+): { readonly note: string; readonly amount: ReturnType<typeof parseAmount> } | null {
   const starts: number[] = [];
   for (const match of input.matchAll(AMOUNT_START)) {
     const token = match[0];
@@ -177,16 +179,16 @@ function splitNoteAndAmount(input: string): { readonly note: string; readonly am
       const note = input.slice(0, start).trim();
       if (note.length === 0) continue;
       return { note, amount };
-    } catch {
-      continue;
-    }
+    } catch {}
   }
   return null;
 }
 
 export function shiftLocalDays(now: Date, timeZone: string, dayOffset: number): string {
   const parts = zonedClock(now, timeZone);
-  const shifted = new Date(Date.UTC(parts.year, parts.month - 1, parts.day + dayOffset, parts.hour, parts.minute, parts.second));
+  const shifted = new Date(
+    Date.UTC(parts.year, parts.month - 1, parts.day + dayOffset, parts.hour, parts.minute, parts.second),
+  );
   return zonedDateTimeToUtc({
     year: shifted.getUTCFullYear(),
     month: shifted.getUTCMonth() + 1,
@@ -198,7 +200,10 @@ export function shiftLocalDays(now: Date, timeZone: string, dayOffset: number): 
   }).toISOString();
 }
 
-function zonedClock(instant: Date, timeZone: string): {
+function zonedClock(
+  instant: Date,
+  timeZone: string,
+): {
   readonly year: number;
   readonly month: number;
   readonly day: number;
@@ -228,9 +233,19 @@ function zonedClock(instant: Date, timeZone: string): {
     return Number(raw);
   };
   const hour = read("hour") === 24 ? 0 : read("hour");
-  return { year: read("year"), month: read("month"), day: read("day"), hour, minute: read("minute"), second: read("second") };
+  return {
+    year: read("year"),
+    month: read("month"),
+    day: read("day"),
+    hour,
+    minute: read("minute"),
+    second: read("second"),
+  };
 }
 
 function normalizeSpace(input: string): string {
-  return input.replace(/[\u00A0\u202F\u2009]/g, " ").replace(/\s+/g, " ").trim();
+  return input
+    .replace(/[\u00A0\u202F\u2009]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 }

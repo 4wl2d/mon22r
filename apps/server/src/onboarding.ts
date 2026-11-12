@@ -42,7 +42,9 @@ export function decideOnboarding(step: Exclude<OnboardingStep, "ready">, text: s
   return { type: "finish", createStarterAccounts: choice === "yes" };
 }
 
-export function starterAccountsIfConfirmed(choice: "yes" | "no" | null): readonly { readonly name: string; readonly currency: string }[] {
+export function starterAccountsIfConfirmed(
+  choice: "yes" | "no" | null,
+): readonly { readonly name: string; readonly currency: string }[] {
   if (choice !== "yes") return [];
   return STARTER_ACCOUNTS;
 }

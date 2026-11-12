@@ -1,13 +1,13 @@
-import { useEffect, useState } from "react";
 import type { User } from "@mon22r/domain";
-import { errorText, getMe } from "./api";
-import { currentMonth, type MonthPoint } from "./format";
+import { useEffect, useState } from "react";
 import { AccountsScreen } from "./AccountsScreen";
+import { errorText, getMe } from "./api";
 import { FeedScreen } from "./FeedScreen";
+import { currentMonth, type MonthPoint } from "./format";
 import { MonthScreen } from "./MonthScreen";
 import { PlansScreen } from "./PlansScreen";
 import { SetupScreen } from "./SetupScreen";
-import { insetStyle, LaunchParamsAuth, useTelegramInsets, type TelegramBoot } from "./telegram";
+import { insetStyle, LaunchParamsAuth, type TelegramBoot, useTelegramInsets } from "./telegram";
 import { Status } from "./ui";
 
 type Screen = "month" | "plans" | "feed" | "accounts";
@@ -56,7 +56,10 @@ export function App({ telegram }: { telegram: TelegramBoot }) {
         <p className="wordmark">mon22r</p>
         {gate.status === "loading" ? <Status text="Загрузка." /> : null}
         {gate.status === "error" ? (
-          <Status text={gate.message} action={{ label: "Повторить", onClick: () => setAttempt((value) => value + 1) }} />
+          <Status
+            text={gate.message}
+            action={{ label: "Повторить", onClick: () => setAttempt((value) => value + 1) }}
+          />
         ) : null}
         {gate.status === "setup" ? (
           <SetupScreen user={gate.user} onReady={(user) => setGate({ status: "ready", user })} />

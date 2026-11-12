@@ -1,9 +1,15 @@
-import { afterEach, describe, expect, it } from "vitest";
-
-import { createUser, migrate, openDatabase, recordTransaction, recordTransfer, updateStoredUser, upsertFxRate, type Mon22rDb } from "@mon22r/db";
+import {
+  createUser,
+  type Mon22rDb,
+  migrate,
+  openDatabase,
+  recordTransaction,
+  recordTransfer,
+  updateStoredUser,
+  upsertFxRate,
+} from "@mon22r/db";
 import { sign } from "@tma.js/init-data-node";
-
-import { createApp } from "../src/http.js";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   ApiError,
   copyPlans,
@@ -23,6 +29,7 @@ import {
   updatePlanAmount,
   updateTransaction,
 } from "../../miniapp/src/api.js";
+import { createApp } from "../src/http.js";
 
 const open: Mon22rDb[] = [];
 const token = "123456:TESTTOKEN";
@@ -48,7 +55,10 @@ function useClient(db: Mon22rDb, telegramId: number): void {
   });
   const previous = globalThis.fetch;
   globalThis.fetch = async (input, init) => {
-    const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url, "http://127.0.0.1");
+    const url = new URL(
+      typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url,
+      "http://127.0.0.1",
+    );
     const headers = new Headers(init?.headers);
     return app.request(`${url.pathname}${url.search}`, {
       method: init?.method ?? "GET",

@@ -5,23 +5,23 @@ import {
   listIncomePlans,
   listOpenExpectations,
   listTransactions,
+  type Mon22rDb,
   materializePlanExpectation,
   recordTransaction,
   recordTransfer,
   updateIncomeExpectation,
   updateIncomePlan,
-  type Mon22rDb,
 } from "@mon22r/db";
 import {
-  matchInflowToExpectation,
   type Account,
   type IncomeExpectation,
   type IncomePlan,
+  matchInflowToExpectation,
   type Transaction,
   type User,
 } from "@mon22r/domain";
 
-import { normalizeNote, parsePhrase, rememberedCategoryId, type ParsedPhrase } from "./phrases.js";
+import { normalizeNote, type ParsedPhrase, parsePhrase, rememberedCategoryId } from "./phrases.js";
 import { refreshOpenExpectations } from "./plans.js";
 
 export type CaptureResult =
@@ -171,7 +171,11 @@ function applyPlan(
   return { type: "plan", plan, expectation };
 }
 
-function offerFor(db: Mon22rDb, userId: string, transaction: Transaction): { expectationId: string; name: string } | null {
+function offerFor(
+  db: Mon22rDb,
+  userId: string,
+  transaction: Transaction,
+): { expectationId: string; name: string } | null {
   const match = matchInflowToExpectation(listOpenExpectations(db, userId), {
     id: transaction.id,
     userId,

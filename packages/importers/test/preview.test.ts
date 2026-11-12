@@ -1,17 +1,16 @@
-import { afterEach, describe, expect, it } from "vitest";
-
 import {
   createAccount,
   createUser,
   findTransactionByImportKey,
   listTransactions,
+  type Mon22rDb,
   migrate,
   openDatabase,
   recordTransaction,
-  type Mon22rDb,
 } from "@mon22r/db";
 import { isTransaction } from "@mon22r/domain";
-import { commitStatementLines, headerFingerprint, parseCsvTable, previewCsv, type CsvMapping } from "@mon22r/importers";
+import { type CsvMapping, commitStatementLines, headerFingerprint, parseCsvTable, previewCsv } from "@mon22r/importers";
+import { afterEach, describe, expect, it } from "vitest";
 
 const open: Mon22rDb[] = [];
 
@@ -56,14 +55,20 @@ describe("csv preview", () => {
     const db = database();
     const user = createUser(db, { id: "user-a", homeCurrency: "RSD", timeZone: "Europe/Belgrade" });
     const account = createAccount(db, user.id, { id: "acct", name: "Поштанска", currency: "RSD" });
-    const isDuplicate = (externalKey: string) => findTransactionByImportKey(db, user.id, "sample", externalKey) !== null;
+    const isDuplicate = (externalKey: string) =>
+      findTransactionByImportKey(db, user.id, "sample", externalKey) !== null;
     const first = previewCsv({ csv: sample, mapping, isDuplicate });
     expect(first.counts).toEqual({ new: 2, duplicate: 1, skipped: 3 });
     expect(first.rows.filter((row) => row.reason === "opening_balance")).toHaveLength(1);
     expect(first.rows.filter((row) => row.reason === "closing_balance")).toHaveLength(1);
     expect(first.rows.filter((row) => row.reason === "cashback_points")).toHaveLength(1);
     const coffee = first.rows.find((row) => row.line?.externalKey === "row-coffee" && row.status === "new");
-    expect(coffee?.line).toMatchObject({ amountMinor: 35_000, currency: "RSD", direction: "outflow", description: "coffee" });
+    expect(coffee?.line).toMatchObject({
+      amountMinor: 35_000,
+      currency: "RSD",
+      direction: "outflow",
+      description: "coffee",
+    });
     expect(isTransaction(coffee?.line)).toBe(false);
 
     const lines = first.rows.flatMap((row) => (row.line === null ? [] : [row.line]));
