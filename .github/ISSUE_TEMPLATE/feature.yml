@@ -1,0 +1,24 @@
+name: Feature request
+description: Suggest a focused improvement to the ledger.
+title: "feature: "
+labels: [enhancement]
+body:
+  - type: textarea
+    id: need
+    attributes:
+      label: What would this help you do?
+      description: Describe a concrete workflow or problem. Use synthetic examples.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: Explain the outcome and relevant alternatives.
+    validations:
+      required: true
+  - type: textarea
+    id: considerations
+    attributes:
+      label: Data, privacy and compatibility considerations
+      description: Mention impacts on currency handling, imports, existing ledgers or deployment.

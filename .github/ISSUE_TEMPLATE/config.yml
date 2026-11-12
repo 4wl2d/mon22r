@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability privately
+    url: https://github.com/4wl2d/mon22r/security/advisories/new
+    about: Keep tokens, account records and exploit details out of public issues.
