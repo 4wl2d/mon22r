@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="640" viewBox="0 0 1280 640" role="img" aria-labelledby="title desc">
+  <title id="title">mon22r. A little ledger. A clearer month.</title>
+  <desc id="desc">A large cream and warm brass mon22r wordmark on dark green-black, with Telegram, self-hosted, and multi-currency labels. Abstract ledger lines contain no financial data.</desc>
+  <defs>
+    <pattern id="ruling" width="48" height="48" patternUnits="userSpaceOnUse">
+      <path d="M48 0H0V48" fill="none" stroke="#e7e2d6" stroke-opacity="0.035"/>
+    </pattern>
+    <linearGradient id="glow" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#a68445" stop-opacity="0.12"/>
+      <stop offset="1" stop-color="#a68445" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+  <rect width="1280" height="640" fill="#161814"/>
+  <rect width="1280" height="640" fill="url(#ruling)"/>
+  <path d="M997 0H1280V640H885Z" fill="url(#glow)"/>
+  <path d="M0 1H1280M0 639H1280" stroke="#a68445" stroke-opacity="0.65"/>
+  <g font-family="'IBM Plex Sans', Arial, sans-serif">
+    <path d="M74 76h28m-14-14v28" stroke="#a68445" stroke-width="2"/>
+    <text x="120" y="82" fill="#a4a198" font-size="16" letter-spacing="4">THE EVERYDAY LEDGER</text>
+    <text x="67" y="327" fill="#e7e2d6" font-family="Fraunces, Georgia, 'Times New Roman', serif" font-size="218" letter-spacing="-10">mon<tspan fill="#a68445">22</tspan>r</text>
+    <text x="77" y="427" fill="#e7e2d6" font-family="Fraunces, Georgia, 'Times New Roman', serif" font-size="48" letter-spacing="-0.7">A little ledger. A clearer month.</text>
+    <path d="M77 480H1203" stroke="#3c3c37"/>
+    <g fill="#a4a198" font-size="17" letter-spacing="2.3">
+      <text x="79" y="547">TELEGRAM</text>
+      <text x="276" y="547">SELF-HOSTED</text>
+      <text x="524" y="547">MULTI-CURRENCY</text>
+    </g>
+    <g fill="#a68445">
+      <circle cx="239" cy="541" r="3"/>
+      <circle cx="487" cy="541" r="3"/>
+    </g>
+    <text x="1203" y="547" text-anchor="end" fill="#a68445" font-size="15" letter-spacing="2">4wl2d / mon22r</text>
+  </g>
+  <g transform="translate(1054 164)" fill="none" stroke="#a68445" stroke-opacity="0.55">
+    <path d="M0 0H149M0 32H149M0 64H149M0 96H149M0 128H149M0 160H149"/>
+    <path d="M19-15V175M109-15V175"/>
+    <path d="M27 49h43m47 64h22m-112 32h58" stroke="#e7e2d6" stroke-opacity="0.45" stroke-width="3"/>
+  </g>
+</svg>

@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="480" viewBox="0 0 1280 480" role="img" aria-labelledby="title desc">
+  <title id="title">mon22r. A little ledger. A clearer month.</title>
+  <desc id="desc">A warm brass and cream wordmark on a dark background, beside an illustrative ledger. All displayed amounts are synthetic demo data.</desc>
+  <defs>
+    <linearGradient id="paper" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#252820"/>
+      <stop offset="1" stop-color="#1b1e18"/>
+    </linearGradient>
+    <pattern id="ruling" width="36" height="36" patternUnits="userSpaceOnUse">
+      <path d="M36 0H0V36" fill="none" stroke="#e7e2d6" stroke-opacity="0.025"/>
+    </pattern>
+  </defs>
+  <rect width="1280" height="480" fill="#161814"/>
+  <rect width="1280" height="480" fill="url(#ruling)"/>
+  <path d="M0 1H1280M0 479H1280" stroke="#a68445" stroke-opacity="0.45"/>
+  <g font-family="'IBM Plex Sans', Arial, sans-serif">
+    <path d="M64 61h24m-12-12v24" stroke="#a68445" stroke-width="1.5"/>
+    <text x="104" y="67" fill="#a4a198" font-size="12" letter-spacing="3">THE EVERYDAY LEDGER</text>
+    <text x="60" y="207" fill="#e7e2d6" font-family="Fraunces, Georgia, 'Times New Roman', serif" font-size="132" letter-spacing="-6">mon<tspan fill="#a68445">22</tspan>r</text>
+    <text x="64" y="278" fill="#e7e2d6" font-family="Fraunces, Georgia, 'Times New Roman', serif" font-size="35" letter-spacing="-0.5">A little ledger. A clearer month.</text>
+    <text x="66" y="321" fill="#a4a198" font-size="18">Track the everyday. Plan what comes next.</text>
+    <g fill="#a4a198" font-size="12" letter-spacing="1.7">
+      <text x="66" y="405">TELEGRAM</text>
+      <text x="205" y="405">SELF-HOSTED</text>
+      <text x="378" y="405">MULTI-CURRENCY</text>
+    </g>
+    <g fill="#a68445">
+      <circle cx="181" cy="400" r="2"/>
+      <circle cx="355" cy="400" r="2"/>
+    </g>
+    <g transform="translate(807 56)">
+      <rect x="12" y="12" width="397" height="358" rx="16" fill="#0e100c" fill-opacity="0.55"/>
+      <rect width="397" height="358" rx="16" fill="url(#paper)" stroke="#3c3c37"/>
+      <path d="M28 58H369" stroke="#3c3c37"/>
+      <text x="28" y="35" fill="#a68445" font-size="10" letter-spacing="2">ILLUSTRATIVE LEDGER</text>
+      <text x="28" y="108" fill="#e7e2d6" font-family="Fraunces, Georgia, 'Times New Roman', serif" font-size="29">A month, in view.</text>
+      <text x="28" y="142" fill="#a4a198" font-size="11" letter-spacing="1.3">EUR / SYNTHETIC DEMO DATA</text>
+      <g font-size="14" fill="#a4a198">
+        <text x="28" y="181">In</text><text x="28" y="218">Out</text><text x="28" y="260">Net</text>
+      </g>
+      <g text-anchor="end" fill="#e7e2d6" font-size="21" font-variant="tabular-nums">
+        <text x="369" y="182">420.00</text><text x="369" y="219">168.00</text>
+        <text x="369" y="264" fill="#a68445" font-family="Fraunces, Georgia, 'Times New Roman', serif" font-size="32">252.00</text>
+      </g>
+      <path d="M28 234H369" stroke="#3c3c37"/>
+      <rect x="28" y="292" width="341" height="5" rx="2.5" fill="#35372f"/>
+      <rect x="28" y="292" width="136" height="5" rx="2.5" fill="#a68445"/>
+      <text x="28" y="330" fill="#a4a198" font-size="11">Amounts stay in their own currency.</text>
+    </g>
+  </g>
+  <path d="M749 56V414" stroke="#3c3c37" stroke-dasharray="2 8"/>
+</svg>
