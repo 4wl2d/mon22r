@@ -1,23 +1,52 @@
 import type { Account, Category } from "@mon22r/domain";
-import { type KeyboardEvent, type ReactNode, useEffect, useRef, useState } from "react";
+import { type ReactNode, useEffect, useId, useRef, useState, useSyncExternalStore } from "react";
 
 import { addMonths, formatMonthTitle, type MonthPoint, sameMonth } from "./format";
+import { hapticSelect, holdBackButton } from "./telegram";
 
-/** A sentence about the state of the screen, with an optional way out. Announced to screen readers. */
+const ICONS = {
+  back: "M15 5l-7 7 7 7",
+  forward: "M9 5l7 7-7 7",
+  close: "M6 6l12 12M18 6L6 18",
+  search: "M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14zM20 20l-4-4",
+  plus: "M12 5v14M5 12h14",
+  check: "M5 12.5l4.5 4.5L19 7.5",
+  month: "M5 20V11M12 20V4M19 20v-6",
+  entries: "M9 6h11M9 12h11M9 18h11M4 6h.01M4 12h.01M4 18h.01",
+  settings: "M4 7h9M17 7h3M4 17h3M11 17h9M15 5v4M9 15v4",
+} as const;
+
+export type IconName = keyof typeof ICONS;
+
+export function Icon({ name, small = false }: { name: IconName; small?: boolean }) {
+  return (
+    <svg className={small ? "icon small" : "icon"} viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path d={ICONS[name]} />
+    </svg>
+  );
+}
+
+/**
+ * What a screen says when it has nothing to list or could not load, with one way forward.
+ * Announced to screen readers; a problem interrupts, the rest waits its turn.
+ */
 export function Notice({
+  title,
   text,
   action,
   tone = "plain",
 }: {
-  text: string;
+  title?: string;
+  text: ReactNode;
   action?: { readonly label: string; readonly onClick: () => void };
   tone?: "plain" | "problem";
 }) {
   return (
-    <div className={tone === "problem" ? "notice problem" : "notice"} role={tone === "problem" ? "alert" : "status"}>
+    <div className="card notice" role={tone === "problem" ? "alert" : "status"}>
+      {title ? <p className="notice-title">{title}</p> : null}
       <p>{text}</p>
       {action ? (
-        <button type="button" className="button" onClick={action.onClick}>
+        <button type="button" className={tone === "problem" ? "button" : "button secondary"} onClick={action.onClick}>
           {action.label}
         </button>
       ) : null}
@@ -25,14 +54,13 @@ export function Notice({
   );
 }
 
-const SKELETON_WIDTHS = [88, 71, 54, 79, 62, 85, 68, 51, 74, 57] as const;
-
-/** Grey bars in the shape of the content, shown only until the first answer arrives. */
-export function Skeleton({ lines }: { lines: number }) {
+/** Grey blocks in the shape of the cards to come, shown only until the first answer arrives. */
+export function Skeleton({ blocks }: { blocks: readonly number[] }) {
   return (
     <div className="skeleton" role="status" aria-busy="true" aria-label="Загрузка">
-      {SKELETON_WIDTHS.slice(0, lines).map((width) => (
-        <span key={width} style={{ width: `${width}%` }} />
+      {blocks.map((height, index) => (
+        // biome-ignore lint/suspicious/noArrayIndexKey: the blocks are a fixed, unordered placeholder.
+        <span key={index} className="skeleton-block" style={{ height }} />
       ))}
     </div>
   );
@@ -52,35 +80,39 @@ export function MonthSwitcher({
   const atStart = point.year <= 1 && point.month <= 1;
   const atEnd = point.year >= 9999 && point.month >= 12;
   const current = sameMonth(point, today);
+  const go = (next: MonthPoint) => {
+    hapticSelect();
+    onChange(next);
+  };
   return (
     <div className="switcher">
       <button
         type="button"
-        className="step"
+        className="icon-button"
         aria-label="Месяц раньше"
         disabled={atStart}
-        onClick={() => onChange(addMonths(point, -1))}
+        onClick={() => go(addMonths(point, -1))}
       >
-        ‹
+        <Icon name="back" />
       </button>
       <button
         type="button"
         className={busy ? "month-label busy" : "month-label"}
         disabled={current}
         aria-label={current ? formatMonthTitle(point) : `${formatMonthTitle(point)}, вернуться к текущему месяцу`}
-        onClick={() => onChange(today)}
+        onClick={() => go(today)}
       >
         {formatMonthTitle(point)}
-        {current ? null : <span className="month-hint">к текущему</span>}
+        {current ? null : <span className="month-hint">к текущему месяцу</span>}
       </button>
       <button
         type="button"
-        className="step"
+        className="icon-button"
         aria-label="Месяц позже"
         disabled={atEnd}
-        onClick={() => onChange(addMonths(point, 1))}
+        onClick={() => go(addMonths(point, 1))}
       >
-        ›
+        <Icon name="forward" />
       </button>
     </div>
   );
@@ -88,7 +120,7 @@ export function MonthSwitcher({
 
 export type ChipOption = { readonly id: string; readonly label: string; readonly count?: number };
 
-/** One row of choices, exactly one of which is on. Scrolls sideways when it does not fit. */
+/** A set of choices, at most one of which is on. In a row it scrolls sideways; wrapped it shows them all. */
 export function Chips({
   options,
   value,
@@ -116,11 +148,62 @@ export function Chips({
           disabled={disabled}
           onClick={() => onChange(option.id)}
         >
-          {option.label}
+          <span>{option.label}</span>
           {option.count === undefined ? null : <span className="chip-count">{option.count}</span>}
         </button>
       ))}
     </fieldset>
+  );
+}
+
+/**
+ * A panel that rises over the screen for one object and what can be done with it.
+ * It is a modal dialog: focus stays inside, Escape, the scrim, the close control,
+ * and the Telegram back button all close it. The parent renders it only while it is open.
+ */
+export function Sheet({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
+  const dialog = useRef<HTMLDialogElement>(null);
+  const titleId = useId();
+  const close = useRef(onClose);
+  close.current = onClose;
+
+  useEffect(() => {
+    const element = dialog.current;
+    if (element && !element.open) element.showModal();
+    const release = holdBackButton(() => close.current());
+    return () => {
+      release();
+      if (element?.open) element.close();
+    };
+  }, []);
+
+  return (
+    // biome-ignore lint/a11y/useKeyWithClickEvents: the click is the scrim; the keyboard closes with Escape (onCancel) or the close control.
+    <dialog
+      ref={dialog}
+      className="sheet"
+      aria-labelledby={titleId}
+      onCancel={(event) => {
+        event.preventDefault();
+        onClose();
+      }}
+      onClick={(event) => {
+        // A click that lands on the dialog itself is a click on the scrim around the panel.
+        if (event.target === dialog.current) onClose();
+      }}
+    >
+      <div className="sheet-frame">
+        <div className="sheet-head">
+          <h2 className="sheet-title" id={titleId}>
+            {title}
+          </h2>
+          <button type="button" className="icon-button" aria-label="Закрыть" onClick={onClose}>
+            <Icon name="close" />
+          </button>
+        </div>
+        <div className="sheet-body">{children}</div>
+      </div>
+    </dialog>
   );
 }
 
@@ -148,7 +231,7 @@ export function ConfirmButton({
   return (
     <button
       type="button"
-      className={armed ? "text-button danger" : "text-button"}
+      className={armed ? "button danger armed" : "button danger"}
       disabled={disabled}
       onClick={() => {
         if (!armed) {
@@ -164,96 +247,74 @@ export function ConfirmButton({
   );
 }
 
-/**
- * Text that turns into an input when tapped. Enter or leaving the field saves, Escape cancels.
- * `save` returns an error sentence to keep the field open, or null when the value was accepted.
- */
-export function InlineEdit({
-  value,
-  display,
+/** An on/off setting. */
+export function Switch({
+  checked,
   label,
-  inputMode,
-  maxLength,
-  save,
+  disabled,
+  onChange,
 }: {
-  value: string;
-  display?: ReactNode;
+  checked: boolean;
   label: string;
-  inputMode?: "text" | "decimal";
-  maxLength?: number;
-  save: (next: string) => Promise<string | null>;
+  disabled?: boolean;
+  onChange: (next: boolean) => void;
 }) {
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState(value);
-  const [error, setError] = useState("");
-  const [saving, setSaving] = useState(false);
-  const cancelled = useRef(false);
-  const input = useRef<HTMLInputElement>(null);
-
-  useEffect(() => {
-    if (editing) input.current?.select();
-  }, [editing]);
-
-  if (!editing) {
-    return (
-      <button
-        type="button"
-        className="editable"
-        aria-label={`${label}: ${value}. Изменить`}
-        onClick={() => {
-          setDraft(value);
-          setError("");
-          setEditing(true);
-        }}
-      >
-        {display ?? value}
-      </button>
-    );
-  }
-
-  async function commit() {
-    if (cancelled.current) {
-      cancelled.current = false;
-      return;
-    }
-    const next = draft.trim();
-    if (next === value.trim()) {
-      setEditing(false);
-      return;
-    }
-    setSaving(true);
-    const problem = await save(next);
-    setSaving(false);
-    if (problem === null) setEditing(false);
-    else setError(problem);
-  }
-
-  function onKeyDown(event: KeyboardEvent<HTMLInputElement>) {
-    if (event.key === "Enter") event.currentTarget.blur();
-    if (event.key === "Escape") {
-      cancelled.current = true;
-      setEditing(false);
-      setError("");
-    }
-  }
-
   return (
-    <span className="inline-edit">
-      <input
-        ref={input}
-        value={draft}
-        aria-label={label}
-        aria-invalid={error !== ""}
-        inputMode={inputMode ?? "text"}
-        maxLength={maxLength ?? 80}
-        disabled={saving}
-        enterKeyHint="done"
-        onChange={(event) => setDraft(event.target.value)}
-        onBlur={() => void commit()}
-        onKeyDown={onKeyDown}
-      />
-      {error ? <span className="field-error">{error}</span> : null}
-    </span>
+    <button
+      type="button"
+      role="switch"
+      className="switch"
+      aria-checked={checked}
+      aria-label={label}
+      disabled={disabled}
+      onClick={() => onChange(!checked)}
+    />
+  );
+}
+
+export function FieldError({ text }: { text: string }) {
+  if (text === "") return null;
+  return (
+    <p className="field-error" role="alert">
+      {text}
+    </p>
+  );
+}
+
+const TOAST_MS = 2600;
+let toastMessage: { readonly text: string; readonly id: number } | null = null;
+let toastTimer: ReturnType<typeof setTimeout> | undefined;
+const toastListeners = new Set<() => void>();
+
+function publishToast(next: typeof toastMessage): void {
+  toastMessage = next;
+  for (const listener of toastListeners) listener();
+}
+
+/** Confirms a finished action in a line that goes away by itself. */
+export function showToast(text: string): void {
+  clearTimeout(toastTimer);
+  publishToast({ text, id: Date.now() });
+  toastTimer = setTimeout(() => publishToast(null), TOAST_MS);
+}
+
+/** The place toasts appear. Rendered once, above the navigation. */
+export function Toaster() {
+  const message = useSyncExternalStore(
+    (listener) => {
+      toastListeners.add(listener);
+      return () => toastListeners.delete(listener);
+    },
+    () => toastMessage,
+  );
+  return (
+    <div role="status" aria-live="polite">
+      {message ? (
+        <div className="toast" key={message.id}>
+          {message.text}
+        </div>
+      ) : null}
+    </div>
   );
 }
 
@@ -265,4 +326,8 @@ export function categoryLabel(categories: readonly Category[], id: string | null
 export function accountLabel(accounts: readonly Account[], id: string | null): string {
   if (id === null) return "счёт не выбран";
   return accounts.find((account) => account.id === id)?.name ?? "счёт";
+}
+
+export function byName(left: { readonly name: string }, right: { readonly name: string }): number {
+  return left.name.localeCompare(right.name, "ru");
 }

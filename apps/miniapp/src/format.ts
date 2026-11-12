@@ -104,6 +104,98 @@ export function formatDayLabel(iso: string, timeZone: string): string {
   return `${parts.day} ${name}`;
 }
 
+/**
+ * Heading of a day in a list: `Сегодня, 12 ноября`, `Вчера, 11 ноября`, otherwise `10 ноября, вт`.
+ * `now` decides what today is, in the ledger's time zone.
+ */
+export function formatDayHeading(iso: string, timeZone: string, now = new Date()): string {
+  const label = formatDayLabel(iso, timeZone);
+  const day = dayKey(iso, timeZone);
+  if (day === dayKey(now.toISOString(), timeZone)) return `Сегодня, ${label}`;
+  if (day === dayKey(new Date(now.getTime() - 86_400_000).toISOString(), timeZone)) return `Вчера, ${label}`;
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return label;
+  const weekday = new Intl.DateTimeFormat("ru-RU", { timeZone: safeZone(timeZone), weekday: "short" }).format(date);
+  return `${label}, ${weekday}`;
+}
+
+/** `10 ноября, 12:14`. */
+export function formatDateTime(iso: string, timeZone: string): string {
+  const clock = formatClock(iso, timeZone);
+  const day = formatDayLabel(iso, timeZone);
+  return clock === "" ? day : `${day}, ${clock}`;
+}
+
+/** Russian plural: `plural(3, "запись", "записи", "записей")` -> `записи`. */
+export function plural(count: number, one: string, few: string, many: string): string {
+  const tens = Math.abs(count) % 100;
+  const units = tens % 10;
+  if (tens > 10 && tens < 20) return many;
+  if (units === 1) return one;
+  if (units >= 2 && units <= 4) return few;
+  return many;
+}
+
+/** Share of a total as a whole percent, `<1` for a sliver, empty when there is no total to compare with. */
+export function formatShare(part: number, total: number): string {
+  if (total <= 0 || part <= 0) return "";
+  const percent = (part / total) * 100;
+  if (percent < 1) return "<1%";
+  return `${Math.round(percent)}%`;
+}
+
+const COMMON_CURRENCIES = ["EUR", "RSD", "RUB", "GBP", "USD"] as const;
+
+/** ISO 4217 codes the device knows, for a picker. The ledger's server has the final say on a code. */
+export function listCurrencies(): readonly string[] {
+  try {
+    const codes = Intl.supportedValuesOf("currency");
+    if (codes.length > 0) return codes;
+  } catch {
+    // An older web view: the common ones are enough to get started.
+  }
+  return COMMON_CURRENCIES;
+}
+
+/** `сербский динар` for `RSD`, or an empty string when the device has no name for the code. */
+export function currencyName(code: string): string {
+  try {
+    const name = new Intl.DisplayNames(["ru"], { type: "currency" }).of(code);
+    return name === undefined || name === code ? "" : name;
+  } catch {
+    return "";
+  }
+}
+
+export function deviceTimeZone(): string | null {
+  try {
+    const zone = new Intl.DateTimeFormat().resolvedOptions().timeZone;
+    return isTimeZone(zone) ? zone : null;
+  } catch {
+    return null;
+  }
+}
+
+/** IANA time zones the device knows, for a picker. */
+export function listTimeZones(): readonly string[] {
+  try {
+    return Intl.supportedValuesOf("timeZone");
+  } catch {
+    return [];
+  }
+}
+
+/** Offset of a zone from UTC right now, as `UTC+1` or `UTC+5:30`. */
+export function formatUtcOffset(timeZone: string, now = new Date()): string {
+  try {
+    const parts = new Intl.DateTimeFormat("en-US", { timeZone, timeZoneName: "shortOffset" }).formatToParts(now);
+    const offset = parts.find((part) => part.type === "timeZoneName")?.value ?? "";
+    return offset.replace("GMT", "UTC");
+  } catch {
+    return "";
+  }
+}
+
 export function formatClock(iso: string, timeZone: string): string {
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return "";
@@ -129,6 +221,12 @@ export function formatMinor(amountMinor: number, currency: string): string {
 /** The number without the currency code, for places where the code is shown once nearby. */
 export function formatAmount(amountMinor: number, currency: string): string {
   return `${amountMinor < 0 ? "−" : ""}${formatMajor(Math.abs(amountMinor), currency, true)}`;
+}
+
+/** The number with the sign of a result: `+` above zero, `−` below, none at zero. No currency code. */
+export function formatSignedAmount(amountMinor: number, currency: string): string {
+  const sign = amountMinor > 0 ? "+" : amountMinor < 0 ? "−" : "";
+  return `${sign}${formatMajor(Math.abs(amountMinor), currency, true)}`;
 }
 
 /** A signed amount for a list of movements: `+` for money in, `−` for money out. */

@@ -152,6 +152,9 @@ describe("the Mini App client against the real server", () => {
       minor: 250_000 - 1706,
       usedConversion: true,
     });
+    // The headline of the month screen: spending and income apart, each in the home currency.
+    expect(month.expenseInHomeCurrency).toMatchObject({ currency: "EUR", minor: 1706, usedConversion: true });
+    expect(month.incomeInHomeCurrency).toMatchObject({ currency: "EUR", minor: 250_000, usedConversion: true });
 
     const transfer = feed.find((row) => row.kind === "transfer");
     if (transfer === undefined) throw new Error("transfer missing");

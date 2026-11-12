@@ -28,13 +28,14 @@ import type { UserFromGetMe } from "grammy/types";
 
 import { callbackData, readCallback } from "./callbacks.js";
 import { applyPhrase, type CaptureResult } from "./capture.js";
-import { buttons, monthLabel, text } from "./copy.js";
+import { buttons, CURRENCY_CHOICES, sinceMonthLabel, text, toast } from "./copy.js";
 import { viewEntry } from "./entry-view.js";
-import { formatEntry, formatMinor, formatTransfer } from "./format.js";
+import { entryLine, formatMinor, transferHtml, transferLine } from "./format.js";
 import type { Runtime } from "./health.js";
 import {
   assignPreviewAccount,
   commitStoredPreview,
+  discardStoredPreview,
   previewUpload,
   savePendingProfile,
   type UploadResult,
@@ -51,7 +52,8 @@ const DOWNLOAD_TIMEOUT_MS = 30_000;
 const API_TIMEOUT_SECONDS = 50;
 
 type Session = { readonly user: User | null; readonly step: OnboardingStep };
-type Markup = { readonly reply_markup: InlineKeyboard } | undefined;
+/** One chat message: Telegram HTML, and the buttons under it. */
+type View = { readonly text: string; readonly keyboard?: InlineKeyboard };
 
 export function createBot(input: {
   readonly token: string;
@@ -69,7 +71,7 @@ export function createBot(input: {
 }): Bot {
   const { db } = input;
   const log = input.log ?? silentLogger;
-  const appMarkup = appReplyMarkup(input.miniAppUrl);
+  const appKeyboard = appButton(input.miniAppUrl);
   const bot = new Bot(input.token, {
     client: {
       timeoutSeconds: API_TIMEOUT_SECONDS,
@@ -97,8 +99,8 @@ export function createBot(input: {
     const id = ctx.from?.id;
     if (id === undefined || !input.allowed.has(id)) {
       log.warn("bot access denied", { updateId: ctx.update.update_id, chatType: ctx.chat?.type });
-      if (ctx.callbackQuery) await ctx.answerCallbackQuery({ text: text.denied });
-      else if (ctx.chat?.type === "private") await ctx.reply(text.denied);
+      if (ctx.callbackQuery) await ctx.answerCallbackQuery({ text: toast.denied });
+      else if (ctx.chat?.type === "private") await say(ctx, text.denied);
       return;
     }
     if (ctx.chat?.type !== undefined && ctx.chat.type !== "private") return;
@@ -106,15 +108,15 @@ export function createBot(input: {
   });
 
   bot.on("callback_query:data", async (ctx) => {
-    let toast: string | undefined;
+    let answer: string | undefined;
     try {
-      toast = await handleCallback(ctx, ctx.callbackQuery.data);
+      answer = await handleCallback(ctx, ctx.callbackQuery.data);
     } catch (error) {
       log.error("callback failed", { updateId: ctx.update.update_id, ...errorFields(error) });
       // The button may already have changed the entry before the redraw failed, so this cannot claim otherwise.
-      toast = text.failedAction;
+      answer = toast.failedAction;
     } finally {
-      await ctx.answerCallbackQuery(toast === undefined ? undefined : { text: toast }).catch(() => undefined);
+      await ctx.answerCallbackQuery(answer === undefined ? undefined : { text: answer }).catch(() => undefined);
     }
   });
 
@@ -122,6 +124,15 @@ export function createBot(input: {
     const from = ctx.from;
     if (from === undefined) return undefined;
     const session = loadSession(db, from.id);
+    // Setup buttons come first: the currency is chosen before there is a user to load.
+    const currency = /^h:([A-Z]{3})$/.exec(data)?.[1];
+    if (currency !== undefined) {
+      const decision = decideOnboarding("currency", currency);
+      if (session.step !== "currency" || decision.type !== "save-currency") return undefined;
+      await settle(ctx, text.currencyChosen(decision.homeCurrency));
+      await saveCurrency(db, from.id, decision.homeCurrency, ctx);
+      return undefined;
+    }
     const parsed = readCallback(data);
     const user = session.user;
     if (parsed === null || user === null) {
@@ -133,53 +144,63 @@ export function createBot(input: {
       case "z":
         if (session.step !== "timezone") return undefined;
         updateStoredUser(db, user.id, { timeZone: DEFAULT_TIME_ZONE, onboardingStep: "accounts" });
-        await ctx.reply(text.askAccounts, { reply_markup: accountsKeyboard() });
+        await settle(ctx, text.timeZoneChosen(DEFAULT_TIME_ZONE));
+        await say(ctx, text.askAccounts, accountsKeyboard());
         return undefined;
       case "y":
       case "n":
         if (session.step !== "accounts") return undefined;
-        await finishAccounts(db, user.id, parsed.prefix === "y", ctx, appMarkup);
+        await settle(ctx, text.accountsChosen(parsed.prefix === "y"));
+        await finishAccounts(db, user.id, parsed.prefix === "y", ctx, appKeyboard);
         return undefined;
       case "u": {
         const deleted = first === undefined ? [] : deleteTransaction(db, user.id, first);
         const reply = deleted.length === 0 ? text.alreadyUndone : text.undone(describeDeleted(db, user.id, deleted));
-        await redraw(ctx, reply, undefined);
+        await redraw(ctx, { text: reply });
         return undefined;
       }
       case "c": {
         if (first === undefined || second === undefined) return undefined;
         const transaction = correctOrNull(db, user.id, first, { categoryId: second });
-        if (transaction === null) return text.alreadyUndone;
-        const view = viewEntry(db, user.id, transaction);
-        await redraw(ctx, view.text, view.keyboard);
+        if (transaction === null) return toast.alreadyUndone;
+        await redraw(ctx, viewEntry(db, user.id, transaction));
         return undefined;
       }
       case "a": {
         if (first === undefined || second === undefined) return undefined;
         const transaction = correctOrNull(db, user.id, first, { accountId: second });
-        if (transaction === null) return text.alreadyUndone;
-        const view = viewEntry(db, user.id, transaction);
-        await redraw(ctx, view.text, view.keyboard);
+        if (transaction === null) return toast.alreadyUndone;
+        await redraw(ctx, viewEntry(db, user.id, transaction));
         const account = listAccounts(db, user.id).find((item) => item.id === transaction.accountId);
-        return account === undefined ? undefined : text.movedTo(account.name);
+        return account === undefined ? undefined : toast.movedTo(account.name);
       }
       case "m": {
-        const toast = closeOffer(db, user.id, first, second);
+        const answer = closeOffer(db, user.id, first, second);
         const transaction = first === undefined ? null : getTransaction(db, user.id, first);
-        if (transaction !== null) {
-          const view = viewEntry(db, user.id, transaction);
-          await redraw(ctx, view.text, view.keyboard);
-        }
-        return toast;
+        if (transaction !== null) await redraw(ctx, viewEntry(db, user.id, transaction));
+        return answer;
       }
       case "i":
-        if (first !== undefined) await commitImport(db, user, first, ctx);
+        if (first !== undefined) await commitImport(db, user, first, ctx, appKeyboard);
         return undefined;
-      case "b":
-        if (first !== undefined && second !== undefined) {
-          await replyImport(ctx, assignPreviewAccount(db, user, first, second));
+      case "x":
+        if (first === undefined) return undefined;
+        if (!discardStoredPreview(db, user, first)) return toast.importGone;
+        await redraw(ctx, { text: text.importCancelled });
+        return undefined;
+      case "b": {
+        if (first === undefined || second === undefined) return undefined;
+        let assigned: UploadResult;
+        try {
+          assigned = assignPreviewAccount(db, user, first, second);
+        } catch (error) {
+          // The preview was written or dropped, or the account was archived, after the buttons were drawn.
+          if (error instanceof LedgerError) return toast.importGone;
+          throw error;
         }
+        await redraw(ctx, importView(assigned));
         return undefined;
+      }
       default:
         if (session.step !== "ready") await prompt(ctx, session.step);
         return undefined;
@@ -189,34 +210,35 @@ export function createBot(input: {
   bot.on("message:document", async (ctx) => {
     const session = loadSession(db, ctx.from.id);
     if (session.step !== "ready" || session.user === null) {
-      await ctx.reply(text.setupFirst);
+      await say(ctx, text.setupFirst);
       return;
     }
     const document = ctx.message.document;
     if ((document.file_size ?? 0) > FILE_LIMIT) {
-      await ctx.reply(text.fileTooBig);
+      await say(ctx, text.fileTooBig);
       return;
     }
     try {
       const remote = await ctx.getFile();
       if (remote.file_path === undefined) {
-        await ctx.reply(text.fileUnreadable);
+        await say(ctx, text.fileUnreadable);
         return;
       }
       const bytes = await download(remote.file_path);
       if (bytes.byteLength > FILE_LIMIT) {
-        await ctx.reply(text.fileTooBig);
+        await say(ctx, text.fileTooBig);
         return;
       }
       if (!isCsvDocument(document.file_name, document.mime_type, bytes)) {
-        await ctx.reply(text.needCsv);
+        await say(ctx, text.needCsv);
         return;
       }
       const csv = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
-      await replyImport(ctx, previewUpload(db, session.user, csv));
+      const view = importView(previewUpload(db, session.user, csv));
+      await say(ctx, view.text, view.keyboard);
     } catch (error) {
       log.error("import upload failed", { updateId: ctx.update.update_id, ...errorFields(error) });
-      await ctx.reply(text.fileUnreadable);
+      await say(ctx, text.fileUnreadable);
     }
   });
 
@@ -229,11 +251,11 @@ export function createBot(input: {
       // A rule violation the parser let through is the user's to fix; anything else is ours.
       if (error instanceof LedgerError) {
         log.warn("text rejected", { updateId: ctx.update.update_id, code: error.code });
-        await ctx.reply(text.unparsed);
+        await say(ctx, text.unparsed);
         return;
       }
       log.error("text failed", { updateId: ctx.update.update_id, ...errorFields(error) });
-      await ctx.reply(text.failed);
+      await say(ctx, text.failed);
     }
   });
 
@@ -242,7 +264,8 @@ export function createBot(input: {
     if (telegramId === undefined) return;
     const command = commandName(message);
     if (command === "start" || command === "help") {
-      if (session.step === "ready") await ctx.reply(text.help, appMarkup);
+      if (session.step === "ready") await say(ctx, text.help, appKeyboard);
+      else if (session.step === "currency") await say(ctx, text.start, currencyKeyboard());
       else await prompt(ctx, session.step);
       return;
     }
@@ -253,18 +276,18 @@ export function createBot(input: {
       }
       if (command === "month") {
         const month = monthContaining(now(), session.user.timeZone);
-        await ctx.reply(monthSummary(db, session.user, month), appMarkup);
+        await say(ctx, monthSummary(db, session.user, month), appKeyboard);
         return;
       }
       const undo = undoLatest(db, session.user.id, ctx.update.update_id, now());
       if (undo.type === "undone") await confirmWrite(ctx, () => ({ text: text.undone(undo.line) }));
-      else await ctx.reply(undo.type === "replayed" ? text.replayed : text.nothingToUndo);
+      else await say(ctx, undo.type === "replayed" ? text.replayed : text.nothingToUndo);
       return;
     }
     if (session.step === "currency") {
       const decision = decideOnboarding("currency", message);
       if (decision.type !== "save-currency") {
-        await ctx.reply(text.invalidCurrency);
+        await say(ctx, text.invalidCurrency, currencyKeyboard());
         return;
       }
       await saveCurrency(db, telegramId, decision.homeCurrency, ctx);
@@ -277,25 +300,26 @@ export function createBot(input: {
     if (session.step === "timezone") {
       const decision = decideOnboarding("timezone", message);
       if (decision.type !== "save-timezone") {
-        await ctx.reply(text.invalidTimeZone, { reply_markup: timezoneKeyboard() });
+        await say(ctx, text.invalidTimeZone, timezoneKeyboard());
         return;
       }
       updateStoredUser(db, session.user.id, { timeZone: decision.timeZone, onboardingStep: "accounts" });
-      await ctx.reply(text.askAccounts, { reply_markup: accountsKeyboard() });
+      await say(ctx, text.askAccounts, accountsKeyboard());
       return;
     }
     if (session.step === "accounts") {
       const decision = decideOnboarding("accounts", message);
       if (decision.type !== "finish") {
-        await ctx.reply(text.needYesOrNo, { reply_markup: accountsKeyboard() });
+        await say(ctx, text.needYesOrNo, accountsKeyboard());
         return;
       }
-      await finishAccounts(db, session.user.id, decision.createStarterAccounts, ctx, appMarkup);
+      await finishAccounts(db, session.user.id, decision.createStarterAccounts, ctx, appKeyboard);
       return;
     }
     if (/^профиль(?:\s|$)/iu.test(message)) {
       const saved = savePendingProfile(db, session.user, message);
-      await ctx.reply(
+      await say(
+        ctx,
         saved === "saved"
           ? text.profileSaved
           : saved === "missing"
@@ -313,7 +337,7 @@ export function createBot(input: {
       return;
     }
     const reply = renderCapture(db, user, result);
-    await ctx.reply(reply.text, reply.keyboard === undefined ? undefined : { reply_markup: reply.keyboard });
+    await say(ctx, reply.text, reply.keyboard);
   }
 
   /**
@@ -321,25 +345,22 @@ export function createBot(input: {
    * If it cannot be built or sent, a plain line goes out instead and the error stays here:
    * letting it reach the caller would produce "nothing was recorded", which would be false and invite a duplicate.
    */
-  async function confirmWrite(
-    ctx: Context,
-    build: () => { readonly text: string; readonly keyboard?: InlineKeyboard },
-  ): Promise<void> {
+  async function confirmWrite(ctx: Context, build: () => View): Promise<void> {
     try {
       const reply = build();
-      await ctx.reply(reply.text, reply.keyboard === undefined ? undefined : { reply_markup: reply.keyboard });
+      await say(ctx, reply.text, reply.keyboard);
     } catch (error) {
       log.error("confirmation failed after a write", { updateId: ctx.update.update_id, ...errorFields(error) });
-      await ctx.reply(text.doneUnconfirmed).catch(() => undefined);
+      await say(ctx, text.doneUnconfirmed).catch(() => undefined);
     }
   }
 
   bot.on("edited_message", async (ctx) => {
-    await ctx.reply(text.editIgnored);
+    await say(ctx, text.editIgnored);
   });
 
   bot.on("message", async (ctx) => {
-    await ctx.reply(text.unsupported);
+    await say(ctx, text.unsupported);
   });
 
   return bot;
@@ -366,7 +387,7 @@ async function saveCurrency(db: Mon22rDb, telegramId: number, homeCurrency: stri
     user = updateStoredUser(db, user.id, { homeCurrency });
   }
   updateStoredUser(db, user.id, { onboardingStep: "timezone" });
-  await ctx.reply(text.askTimeZone, { reply_markup: timezoneKeyboard() });
+  await say(ctx, text.askTimeZone, timezoneKeyboard());
 }
 
 async function finishAccounts(
@@ -374,17 +395,17 @@ async function finishAccounts(
   userId: string,
   create: boolean,
   ctx: Context,
-  markup: Markup,
+  appKeyboard: InlineKeyboard | undefined,
 ): Promise<void> {
   if (create) createStarterAccounts(db, userId);
   updateStoredUser(db, userId, { onboardingStep: null });
   const lead = create ? text.accountsCreated : text.accountsSkipped;
-  await ctx.reply(`${lead}\n\n${text.help}`, markup);
+  await say(ctx, `${lead}\n\n${text.help}`, appKeyboard);
 }
 
-function appReplyMarkup(url: string | undefined): Markup {
+function appButton(url: string | undefined): InlineKeyboard | undefined {
   if (!isMiniAppUrl(url)) return undefined;
-  return { reply_markup: new InlineKeyboard().webApp(buttons.app, url) };
+  return new InlineKeyboard().webApp(buttons.app, url);
 }
 
 function isMiniAppUrl(url: string | undefined): url is string {
@@ -398,33 +419,44 @@ function isMiniAppUrl(url: string | undefined): url is string {
 }
 
 async function prompt(ctx: Context, step: OnboardingStep): Promise<void> {
-  if (step === "timezone") {
-    await ctx.reply(text.askTimeZone, { reply_markup: timezoneKeyboard() });
-    return;
-  }
-  if (step === "accounts") {
-    await ctx.reply(text.askAccounts, { reply_markup: accountsKeyboard() });
-    return;
-  }
-  if (step === "currency") await ctx.reply(text.askCurrency);
+  if (step === "timezone") await say(ctx, text.askTimeZone, timezoneKeyboard());
+  else if (step === "accounts") await say(ctx, text.askAccounts, accountsKeyboard());
+  else if (step === "currency") await say(ctx, text.askCurrency, currencyKeyboard());
+}
+
+/** Every message goes out as HTML, without a link preview. */
+function messageOptions(keyboard: InlineKeyboard | undefined) {
+  return {
+    parse_mode: "HTML" as const,
+    link_preview_options: { is_disabled: true },
+    ...(keyboard === undefined ? {} : { reply_markup: keyboard }),
+  };
+}
+
+async function say(ctx: Context, body: string, keyboard?: InlineKeyboard): Promise<void> {
+  await ctx.reply(body, messageOptions(keyboard));
 }
 
 /** Replaces the message a button belongs to. Falls back to a new message when it can no longer be edited. */
-async function redraw(ctx: Context, body: string, keyboard: InlineKeyboard | undefined): Promise<void> {
+async function redraw(ctx: Context, view: View): Promise<void> {
   try {
-    await ctx.editMessageText(body, keyboard === undefined ? undefined : { reply_markup: keyboard });
+    await ctx.editMessageText(view.text, messageOptions(view.keyboard));
   } catch (error) {
     // Telegram answers 400 when a double tap asks for the text that is already shown.
     if (error instanceof GrammyError && error.description.includes("message is not modified")) return;
-    await ctx.reply(body, keyboard === undefined ? undefined : { reply_markup: keyboard });
+    await say(ctx, view.text, view.keyboard);
   }
 }
 
-function renderCapture(
-  db: Mon22rDb,
-  user: User,
-  result: CaptureResult,
-): { readonly text: string; readonly keyboard?: InlineKeyboard } {
+/**
+ * Turns an answered setup question into its answer and takes its buttons away.
+ * It is a courtesy: when the message cannot be edited, setup goes on without it.
+ */
+async function settle(ctx: Context, body: string): Promise<void> {
+  await ctx.editMessageText(body, messageOptions(undefined)).catch(() => undefined);
+}
+
+function renderCapture(db: Mon22rDb, user: User, result: CaptureResult): View {
   switch (result.type) {
     case "unparsed":
       return { text: text.unparsed };
@@ -454,21 +486,26 @@ function renderCapture(
     }
     case "transfer": {
       const [outflow, inflow] = result.transactions;
-      const keyboard = new InlineKeyboard();
       const undo = callbackData("u", [outflow.id]);
-      if (undo !== null) keyboard.text(buttons.undo, undo);
-      return { text: formatTransfer(outflow, inflow, result.from.name, result.to.name), keyboard };
+      return {
+        text: transferHtml(outflow, inflow, result.from.name, result.to.name),
+        keyboard: undo === null ? undefined : new InlineKeyboard().text(buttons.undo, undo),
+      };
     }
-    case "plan":
+    case "plan": {
+      const { plan, expectation } = result;
+      const since = sinceMonthLabel(expectation.year, expectation.month);
       return {
         text: text.planSaved(
-          formatMinor(result.plan.amountMinor, result.plan.currency),
-          result.plan.currency,
-          result.plan.name,
-          result.expectation.dayOfMonth,
-          monthLabel(result.expectation.year, result.expectation.month),
+          formatMinor(plan.amountMinor, plan.currency),
+          plan.currency,
+          plan.name,
+          plan.recurrence === "monthly"
+            ? `каждый месяц ${expectation.dayOfMonth}-го числа · ${since}`
+            : `${expectation.dayOfMonth}-го числа · ${since.slice(2)}`,
         ),
       };
+    }
   }
 }
 
@@ -492,14 +529,14 @@ function undoLatest(
   return apply();
 }
 
-/** Says what an undo removed, so a wrong undo is noticed at once. */
+/** Says what an undo removed, so a wrong undo is noticed at once. The line is escaped for HTML. */
 function describeDeleted(db: Mon22rDb, userId: string, deleted: readonly Transaction[]): string {
   const accounts = new Map(listAccounts(db, userId).map((account) => [account.id, account.name]));
   const nameOf = (transaction: Transaction): string => accounts.get(transaction.accountId) ?? "счёт";
   const outflow = deleted.find((item) => item.kind === "transfer" && item.direction === "outflow");
   const inflow = deleted.find((item) => item.kind === "transfer" && item.direction === "inflow");
   if (outflow !== undefined && inflow !== undefined) {
-    return formatTransfer(outflow, inflow, nameOf(outflow), nameOf(inflow));
+    return transferLine(outflow, inflow, nameOf(outflow), nameOf(inflow));
   }
   const single = deleted[0];
   if (single === undefined) return "";
@@ -507,7 +544,7 @@ function describeDeleted(db: Mon22rDb, userId: string, deleted: readonly Transac
     single.categoryId === null
       ? null
       : (listCategories(db, userId).find((item) => item.id === single.categoryId)?.name ?? null);
-  return formatEntry(single, nameOf(single), category);
+  return entryLine(single, nameOf(single), category);
 }
 
 function correctOrNull(
@@ -531,10 +568,10 @@ function closeOffer(
   transactionId: string | undefined,
   expectationId: string | undefined,
 ): string {
-  if (transactionId === undefined || expectationId === undefined) return text.alreadyClosed;
+  if (transactionId === undefined || expectationId === undefined) return toast.alreadyClosed;
   const transaction = getTransaction(db, userId, transactionId);
   const expectation = getIncomeExpectation(db, userId, expectationId);
-  if (transaction === null || transaction.kind !== "income" || expectation === null) return text.alreadyClosed;
+  if (transaction === null || transaction.kind !== "income" || expectation === null) return toast.alreadyClosed;
   const match = matchInflowToExpectation([expectation], {
     id: transaction.id,
     userId,
@@ -542,78 +579,89 @@ function closeOffer(
     currency: transaction.currency,
     accountId: transaction.accountId,
   });
-  if (match === null) return text.alreadyClosed;
+  if (match === null) return toast.alreadyClosed;
   updateIncomeExpectation(db, userId, expectation.id, {
     status: match.status,
     receivedMinor: match.expectation.receivedMinor,
     matchedTransactionId: transaction.id,
   });
-  return text.closed;
+  return toast.closed;
 }
 
-async function commitImport(db: Mon22rDb, user: User, previewId: string, ctx: Context): Promise<void> {
+async function commitImport(
+  db: Mon22rDb,
+  user: User,
+  previewId: string,
+  ctx: Context,
+  appKeyboard: InlineKeyboard | undefined,
+): Promise<void> {
   try {
     const result = commitStoredPreview(db, user, previewId);
-    await redraw(ctx, result.created === 0 ? text.nothingNew : text.importDone(result.created), undefined);
+    if (result.created === 0) {
+      await redraw(ctx, { text: text.nothingNew });
+      return;
+    }
+    const account = listAccounts(db, user.id).find((item) => item.id === result.accountId);
+    // The next thing to do with imported lines is to sort them into categories, which the app does best.
+    await redraw(ctx, { text: text.importDone(result.created, account?.name ?? "счёт"), keyboard: appKeyboard });
   } catch (error) {
     if (error instanceof LedgerError) {
-      await redraw(ctx, text.nothingNew, undefined);
+      await redraw(ctx, { text: text.nothingNew });
       return;
     }
     throw error;
   }
 }
 
-function renderAssignment(result: UploadResult): string {
-  if (result.type === "ready") return `${text.importCounts(result.counts)}\n${result.account.name}`;
-  if (result.type === "currency_mismatch")
-    return text.currencyMismatch(result.accountName, result.accountCurrency, result.fileCurrency);
-  if (result.type === "no_account") return text.noAccount(result.currency);
-  if (result.type === "mixed_currency") return text.mixedCurrency;
-  return text.fileUnreadable;
+/** What to say about an uploaded statement, and the buttons that move it forward or drop it. */
+function importView(result: UploadResult): View {
+  switch (result.type) {
+    case "mapping_required":
+      return { text: text.mappingNeeded(result.headers) };
+    case "empty":
+      return { text: text.importEmpty };
+    case "counts":
+      return { text: `${text.importCounts(result.counts)}\n${text.nothingNew}` };
+    case "choose_account": {
+      const keyboard = new InlineKeyboard();
+      for (const account of result.accounts) {
+        const data = callbackData("b", [result.previewId, account.id]);
+        if (data !== null) keyboard.text(account.name.slice(0, 32), data).row();
+      }
+      const cancel = callbackData("x", [result.previewId]);
+      if (cancel !== null) keyboard.text(buttons.cancel, cancel);
+      return { text: `<b>Выписка</b>\n${text.importCounts(result.counts)}\n\n${text.accountChoice}`, keyboard };
+    }
+    case "ready": {
+      const preview = text.importPreview(result.counts, result.account.name);
+      const commit = result.counts.new > 0 ? callbackData("i", [result.previewId]) : null;
+      if (commit === null) return { text: `${preview}\n${text.nothingNew}` };
+      const keyboard = new InlineKeyboard().text(buttons.commit, commit);
+      const cancel = callbackData("x", [result.previewId]);
+      if (cancel !== null) keyboard.text(buttons.cancel, cancel);
+      return { text: preview, keyboard };
+    }
+    case "currency_mismatch":
+      return { text: text.currencyMismatch(result.accountName, result.accountCurrency, result.fileCurrency) };
+    case "no_account":
+      return { text: text.noAccount(result.currency) };
+    case "mixed_currency":
+      return { text: text.mixedCurrency };
+  }
 }
 
-async function replyImport(ctx: Context, result: UploadResult): Promise<void> {
-  if (result.type === "mapping_required") {
-    await ctx.reply(text.mappingNeeded(result.headers));
-    return;
-  }
-  if (result.type === "empty") {
-    await ctx.reply(text.importEmpty);
-    return;
-  }
-  if (result.type === "counts") {
-    await ctx.reply(text.importCounts(result.counts));
-    return;
-  }
-  if (result.type === "choose_account") {
-    const keyboard = new InlineKeyboard();
-    for (const account of result.accounts) {
-      const data = callbackData("b", [result.previewId, account.id]);
-      if (data !== null) keyboard.row().text(account.name.slice(0, 32), data);
-    }
-    await ctx.reply(`${text.importCounts(result.counts)}\n${text.accountChoice}`, { reply_markup: keyboard });
-    return;
-  }
-  if (result.type === "ready") {
-    const keyboard = new InlineKeyboard();
-    const data = result.counts.new > 0 ? callbackData("i", [result.previewId]) : null;
-    if (data !== null) keyboard.text(buttons.commit, data);
-    await ctx.reply(
-      `${text.importCounts(result.counts)}\n${result.account.name}`,
-      data === null ? undefined : { reply_markup: keyboard },
-    );
-    return;
-  }
-  await ctx.reply(renderAssignment(result));
+function currencyKeyboard(): InlineKeyboard {
+  const keyboard = new InlineKeyboard();
+  for (const currency of CURRENCY_CHOICES) keyboard.text(currency, `h:${currency}`);
+  return keyboard;
 }
 
 function timezoneKeyboard(): InlineKeyboard {
-  return new InlineKeyboard().text(buttons.timeZone, "z");
+  return new InlineKeyboard().text(buttons.keepTimeZone, "z");
 }
 
 function accountsKeyboard(): InlineKeyboard {
-  return new InlineKeyboard().text(buttons.yes, "y").text(buttons.no, "n");
+  return new InlineKeyboard().text(buttons.createAccounts, "y").text(buttons.skipAccounts, "n");
 }
 
 function commandName(value: string): string | null {

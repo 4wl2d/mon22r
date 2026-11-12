@@ -22,7 +22,8 @@ import type {
  * GET    /api/me                         -> { ready, user, onboardingStep, accounts, categories, defaultAccountId, version }
  * POST   /api/setup                      { homeCurrency, timeZone?, starterAccounts? } -> { user, accounts, onboardingStep: null }
  * PATCH  /api/settings                   { homeCurrency?, timeZone?, defaultAccountId? } -> { user, defaultAccountId }
- * GET    /api/month?month=YYYY-MM        -> { month, totalsByCurrency, categorySpend, expectations, plans, estimateInHomeCurrency, ... }
+ * GET    /api/month?month=YYYY-MM        -> { month, totalsByCurrency, categorySpend, expectations, plans,
+ *                                              estimateInHomeCurrency, expenseInHomeCurrency, incomeInHomeCurrency, ... }
  * PATCH  /api/plans/:id                  { amountMinor?, currency?, active? } -> { plan }
  * PATCH  /api/expectations/:id           { status } -> { expectation }
  * GET    /api/transactions?month=YYYY-MM -> { transactions }
@@ -72,6 +73,9 @@ export type MonthView = {
   readonly expectations: readonly IncomeExpectation[];
   readonly plans: readonly IncomePlan[];
   readonly estimateInHomeCurrency: HomeCurrencyEstimate | null;
+  /** Spending and income in the home currency. Null when a rate is missing, like the net above. */
+  readonly expenseInHomeCurrency: HomeCurrencyEstimate | null;
+  readonly incomeInHomeCurrency: HomeCurrencyEstimate | null;
 };
 
 export type SetupInput = {
@@ -271,6 +275,9 @@ function readMonth(body: unknown): MonthView {
     expectations: readRows(requireArray(row, "expectations"), readExpectation),
     plans: readRows(requireArray(row, "plans"), readPlan),
     estimateInHomeCurrency: readEstimate(row.estimateInHomeCurrency),
+    // A server one release behind does not send these two; the screen then shows totals per currency only.
+    expenseInHomeCurrency: readEstimate(row.expenseInHomeCurrency ?? null),
+    incomeInHomeCurrency: readEstimate(row.incomeInHomeCurrency ?? null),
   };
 }
 

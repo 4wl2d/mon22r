@@ -30,24 +30,25 @@ A personal-finance ledger for one person, in Telegram. Write what you spent in t
 /month    /undo    /help
 ```
 
-- The reply shows what was saved, with buttons to undo it, pick a category, or move it to another account of the same currency. The message redraws in place.
+- The reply shows the amount with its direction, then the account and category. Its buttons come in the order they are needed: a category while there is none, another account of the same currency, then undo. The message redraws in place.
+- Setup is three questions with the usual answers as buttons. `/help` lists every form as an example that copies on tap.
 - An amount without a currency goes to the **default account**, in that account's currency. Without a default it is read in the home currency. For a named currency the bot reuses the account your last hand-entered line of that currency went to.
 - A category chosen once is remembered for the same note, in the chat and for imported statement lines.
-- Send a CSV statement as a file. Unknown formats ask once for the column names; then you get a preview of new, duplicate, and skipped lines and confirm the import.
+- Send a CSV statement as a file. Unknown formats ask once for the column names; then you get a preview of new, duplicate, and skipped lines and write it or drop it.
 - `/undo` removes the last line you typed, never an imported one, and says what it removed.
 
 ## In the Mini App
 
-- **Месяц.** One number for the month in your home currency, labeled as an estimate at the day's rate, then income, spending, and categories per currency. Tapping a category opens its entries. Expected income for the month is listed below with its status.
-- **Лента.** Entries by day with search and filters. Tap an entry to set its category in one tap, move it, or delete it. With a search or filter active, one action categorizes everything found.
-- **Настройки.** Accounts and the default account, categories, home currency, and time zone.
+- **Месяц.** What the month cost in your home currency, with income and the net beside it, labeled as an estimate when several currencies are involved. Then spending, income, and categories per currency, each category with its share. Tapping a category opens its entries. Expected income for the month is listed below; tap a line to set its status, change the planned amount, or stop the plan.
+- **Записи.** Entries by day with search and category filters that stay in reach while you scroll. Tap an entry to set its category in one tap, move it, or delete it. With a search or filter active, one action categorizes everything found.
+- **Настройки.** Accounts and the default account, categories, home currency, and time zone. Currencies and time zones are picked from a searchable list.
 
-Screens load from a small cache and refresh in the background, so changing tabs or months does not blank the page.
+Anything you can act on opens in a sheet over the screen, and a finished action is confirmed in a line that goes away by itself. The app follows the light or dark theme of your Telegram client. Screens load from a small cache and refresh in the background, so changing tabs or months does not blank the page.
 
 <p align="center">
-  <img src="docs/assets/miniapp-month.jpg" alt="Month screen: a home-currency total, then income, spending, and categories per currency" width="250" />
-  <img src="docs/assets/miniapp-feed.jpg" alt="Feed screen: an entry opened to set its category, move it, or delete it" width="250" />
-  <img src="docs/assets/miniapp-settings.jpg" alt="Settings screen: accounts with the default account, categories, currency and time zone" width="250" />
+  <img src="docs/assets/miniapp-month.jpg" alt="Month screen: spending in the home currency with income and the net, then totals and categories per currency" width="250" />
+  <img src="docs/assets/miniapp-entries.jpg" alt="Entries screen: a sheet over the list to set an entry's category, move it to another account, or delete it" width="250" />
+  <img src="docs/assets/miniapp-settings.jpg" alt="Settings screen: accounts with the default account marked, then categories" width="250" />
 </p>
 <p align="center"><sub>Screens from <code>pnpm preview</code>, with made-up data.</sub></p>
 
